@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-05T14:36:44.932225+00:00",
+  "title": "Design System: Ring Drive",
+  "extensions": {
+    "colorMeta": {
+      "filled-button-foreground": {
+        "role": "neutral",
+        "displayName": "Filled Button Foreground",
+        "source": "SwiftUI.Color.black",
+        "purpose": "Text and symbols on implemented prominent blue and green buttons."
+      }
+    },
+    "typographyMeta": {
+      "incident-headline": {
+        "displayName": "Incident headline",
+        "nativeStyle": ".largeTitle.bold()",
+        "purpose": "Incident summaries and driving empty state."
+      },
+      "section-title": {
+        "displayName": "Section title",
+        "nativeStyle": ".title3.bold()",
+        "purpose": "Nearby stop section and widget instruction."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "nativeStyle": ".headline",
+        "purpose": "Safety status, incident rows, stop names and activity headline."
+      },
+      "body": {
+        "displayName": "Body",
+        "nativeStyle": ".body",
+        "purpose": "Explanation and introductory copy."
+      },
+      "supporting-label": {
+        "displayName": "Supporting label",
+        "nativeStyle": ".subheadline",
+        "purpose": "Camera zones, motion, priority and safety reasoning; local medium/semibold variants."
+      },
+      "footnote": {
+        "displayName": "Footnote",
+        "nativeStyle": ".footnote",
+        "purpose": "Qualifications and connection guidance."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "nativeStyle": ".caption",
+        "purpose": "Sources, timestamps and identifiers; local bold/monospaced variants."
+      },
+      "compact-caption": {
+        "displayName": "Compact caption",
+        "nativeStyle": ".caption2",
+        "purpose": "Synthetic attribution on the Live Activity."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [],
+    "native": {
+      "platform": "ios",
+      "framework": "SwiftUI",
+      "units": "Native layout dimensions are points; text sizes and button geometry are resolved by the platform.",
+      "sources": [
+        "PRODUCT.md",
+        "docs/SURFACE.md",
+        "iOS/App/Views.swift",
+        "iOS/App/RingDriveApp.swift",
+        "iOS/Widgets/RingDriveWidgets.swift"
+      ],
+      "semanticColors": [
+        {
+          "name": "action-blue",
+          "source": "SwiftUI.Color.blue",
+          "role": "primary",
+          "purpose": "Root action tint and camera symbols."
+        },
+        {
+          "name": "urgency-orange",
+          "source": "SwiftUI.Color.orange",
+          "role": "secondary",
+          "purpose": "Urgency and explicit simulation."
+        },
+        {
+          "name": "readiness-green",
+          "source": "SwiftUI.Color.green",
+          "role": "tertiary",
+          "purpose": "Passive resolution and parked readiness."
+        },
+        {
+          "name": "system-foreground",
+          "source": "Implicit SwiftUI foreground style",
+          "role": "neutral",
+          "purpose": "Primary text and native symbols."
+        },
+        {
+          "name": "secondary-foreground",
+          "source": "HierarchicalShapeStyle.secondary",
+          "role": "neutral",
+          "purpose": "Supporting explanations, sources and timestamps."
+        },
+        {
+          "name": "system-background",
+          "source": "SwiftUI.ShapeStyle.background and platform List/Form surfaces",
+          "role": "neutral",
+          "purpose": "Adaptive native backgrounds."
+        }
+      ],
+      "appearance": {
+        "drive": "dark",
+        "interactiveCarPlayPreview": "dark",
+        "incidents": "system",
+        "demoAndRing": "system"
+      },
+      "scaledMetrics": [
+        {
+          "name": "camera-symbol-column",
+          "source": "@ScaledMetric(relativeTo: .subheadline) private var iconWidth: CGFloat = 24",
+          "purpose": "Text-relative evidence-column alignment."
+        }
+      ],
+      "controls": {
+        "buttonStyle": [
+          "borderedProminent",
+          "bordered",
+          "platform default"
+        ],
+        "controlSize": "large for styled driver actions",
+        "plainActionMinimumHeight": "44pt",
+        "fullWidthButtonLabelMinimumHeight": "34pt before native style padding",
+        "customCornerRadii": false
+      },
+      "motionPolicy": "Platform navigation, sheet, alert and full-screen-cover behavior; no custom motion tokens.",
+      "previewFormat": "SwiftUI source. Snippets require this app’s models and surrounding View environment; they are documentary excerpts, not standalone compilable views.",
+      "schemaLimitations": [
+        "Native semantic colors have no fixed canonical CSS/hex equivalent, so no substituted palette values or synthetic tonal ramps are supplied.",
+        "Native text styles have no fixed pixel size; their semantic style is in typographyMeta.",
+        "Native components are recorded as swiftUI/source fields; HTML/CSS preview fields are omitted to avoid inventing a web interface.",
+        "No detector was run on native iOS."
+      ],
+      "runtimeLimits": [
+        "Synthetic and official-runtime evidence must retain explicit source attribution.",
+        "Interactive CarPlay preview is simulated; no granted full CarPlay entitlement.",
+        "Official Ring runtime requires credentials and cannot be certified from this design extraction."
+      ]
+    }
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "description": "Native prominent, large blue action with black foreground and model-owned disabled state.",
+      "swiftUI": "Button { model.explain() } label: { Label(model.speaking ? \"Explaining…\" : \"Listen to explanation\", systemImage: model.speaking ? \"waveform\" : \"speaker.wave.2.fill\").frame(maxWidth: .infinity, minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.black).disabled(model.speaking)",
+      "source": "iOS/App/Views.swift: DriverActions",
+      "refersTo": "button-primary"
+    },
+    {
+      "name": "Safe-stop search",
+      "kind": "button",
+      "description": "Native bordered action; searching updates copy and disables the control.",
+      "swiftUI": "Button { Task { await model.findStop() } } label: { Label(model.searching ? \"Finding nearby stops…\" : \"Find a safe place to stop\", systemImage: \"mappin.and.ellipse\").frame(maxWidth: .infinity, minHeight: 34) }.buttonStyle(.bordered).controlSize(.large).disabled(model.searching)",
+      "source": "iOS/App/Views.swift: DriverActions"
+    },
+    {
+      "name": "Parked review",
+      "kind": "button",
+      "description": "Green prominent review action appears only when canReview is true.",
+      "swiftUI": "if model.canReview { Button { Task { await model.review() } } label: { Label(\"Review incident video\", systemImage: \"play.rectangle.fill\").frame(maxWidth: .infinity, minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).tint(.green).foregroundStyle(.black) }",
+      "source": "iOS/App/Views.swift: DriverActions",
+      "refersTo": "button-review"
+    },
+    {
+      "name": "Native section navigation",
+      "kind": "nav",
+      "description": "Three system tabs, each owning a navigation stack; only Drive forces dark appearance.",
+      "swiftUI": "TabView(selection: $model.selectedTab) { NavigationStack { DriveView() }.tabItem { Label(\"Drive\", systemImage: \"car.side\") }.tag(0); NavigationStack { IncidentListView() }.tabItem { Label(\"Incidents\", systemImage: \"clock.arrow.circlepath\") }.tag(1); NavigationStack { DemoView() }.tabItem { Label(\"Demo & Ring\", systemImage: \"slider.horizontal.3\") }.tag(2) }.tint(.blue).preferredColorScheme(model.selectedTab == 0 ? .dark : nil)",
+      "source": "iOS/App/RingDriveApp.swift: RootView"
+    },
+    {
+      "name": "Camera evidence chain",
+      "kind": "custom",
+      "description": "Blue baseline-aligned symbols, zone labels and times; scaled column and native dividers.",
+      "swiftUI": "struct CameraTrace: View { let events: [CameraEvent]; @ScaledMetric(relativeTo: .subheadline) private var iconWidth: CGFloat = 24; var body: some View { VStack(alignment: .leading, spacing: 14) { ForEach(events) { event in HStack(alignment: .firstTextBaseline, spacing: 12) { Image(systemName: event.kind == .package ? \"shippingbox\" : \"video.fill\").font(.subheadline).foregroundStyle(.blue).frame(width: iconWidth).accessibilityHidden(true); Text(event.zone.rawValue.capitalized + (event.zone == .rear ? \" door\" : \" entrance\")).font(.subheadline.weight(.medium)); Spacer(); Text(event.occurredAt, style: .time).font(.caption.monospacedDigit()).foregroundStyle(.secondary) } } }.padding(.vertical, 16).overlay(alignment: .top) { Divider() }.overlay(alignment: .bottom) { Divider() }.accessibilityElement(children: .combine) } }",
+      "source": "iOS/App/Views.swift: CameraTrace"
+    },
+    {
+      "name": "Video safety status",
+      "kind": "custom",
+      "description": "Explicit locked/ready labels and reason, with simulated vehicle attribution.",
+      "swiftUI": "HStack(alignment: .top, spacing: 14) { Image(systemName: model.canReview ? \"lock.open.fill\" : \"lock.fill\").font(.title2).foregroundStyle(model.canReview ? .green : .secondary); VStack(alignment: .leading, spacing: 6) { Text(model.canReview ? \"Video ready for review\" : \"Video locked\").font(.headline); Text(model.verdict.reason).font(.subheadline).foregroundStyle(.secondary); if model.verdict.isSimulated { Text(\"Simulated vehicle evidence\").font(.caption).foregroundStyle(.orange) } } }.frame(maxWidth: .infinity, alignment: .leading)",
+      "source": "iOS/App/Views.swift: SafetyStatus"
+    },
+    {
+      "name": "Credential field",
+      "kind": "input",
+      "description": "Native secure entry within the official-runtime Form section.",
+      "swiftUI": "SecureField(\"Short-lived Playground token\", text: $token).textInputAutocapitalization(.never).autocorrectionDisabled()",
+      "source": "iOS/App/Views.swift: DemoView"
+    },
+    {
+      "name": "Live Activity",
+      "kind": "custom",
+      "description": "Family-aware native compact information with visible synthetic attribution.",
+      "swiftUI": "HStack(spacing: 12) { Image(systemName: context.state.urgent ? \"exclamationmark.shield.fill\" : \"house.fill\").font(.title2).foregroundStyle(context.state.urgent ? .orange : .blue); VStack(alignment: .leading, spacing: 4) { Text(context.state.headline).font(.headline).lineLimit(family == .small ? 2 : 1); Text(context.state.detail).font(.caption).lineLimit(2); if context.state.synthetic { Text(\"Simulated Ring event\").font(.caption2).foregroundStyle(.secondary) } }; if family != .small { Spacer(); Image(systemName: context.state.videoLocked ? \"lock.fill\" : \"checkmark.shield\") } }.padding(family == .small ? 8 : 16)",
+      "source": "iOS/Widgets/RingDriveWidgets.swift: IncidentActivityView"
+    }
+  ],
+  "narrative": {
+    "northStar": "Hear first. Stop safely.",
+    "overview": "Ring Drive is a native Operate interface for turning home-camera evidence into an audible decision and a safe stop. Its design language is quiet, direct and familiar: system navigation, system text styles, SF Symbols and platform controls carry the experience. The driving presentation uses a dark appearance; Incidents and Demo & Ring follow the system appearance.\n\nA large incident headline leads to the camera observation chain, an explanation action and an explicit video-lock status. Orange calls attention to urgency or simulation, blue identifies actions and camera evidence, and green identifies passive resolution or parked readiness. These roles always accompany words or symbols. This is a demonstration concept, without official Ring affiliation; synthetic evidence and the CarPlay simulation remain visibly identified.",
+    "keyCharacteristics": [
+      "Native SwiftUI controls and system navigation.",
+      "Dynamic Type throughout, with a scaled camera-symbol column.",
+      "Quiet dark driving presentation; adaptive supporting screens.",
+      "Brief evidence, audible explanation and visible video-lock state.",
+      "Explicit simulation labels and system-surface limits."
+    ],
+    "rules": [
+      {
+        "name": "State Has Words",
+        "body": "Urgency, simulation and parked readiness are expressed with text or symbols as well as color.",
+        "section": "colors"
+      },
+      {
+        "name": "Type Follows the Reader",
+        "body": "Use native text styles and scaled dimensions for text-adjacent symbols; do not replace them with fixed type sizes.",
+        "section": "typography"
+      },
+      {
+        "name": "Platform Owns the Controls",
+        "body": "Keep platform navigation, forms, sheets and button styles responsible for their standard appearance and interaction.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use the blue action tint, orange urgency and simulation cues, and green parked readiness with explicit labels.",
+      "Do keep black foregrounds on the implemented blue and green prominent buttons.",
+      "Do use system text styles and preserve the camera column’s subheadline-relative scaling.",
+      "Do retain native tabs, navigation stacks, grouped lists, forms and dismiss controls.",
+      "Do keep the video-lock state visible and expose review only after the model permits it.",
+      "Do label synthetic events, simulated vehicle evidence and the interactive CarPlay preview."
+    ],
+    "donts": [
+      "Don’t invent custom fonts, fixed text sizes, color hex values or corner radii for platform-owned styling.",
+      "Don’t replace the native interface with web-shaped controls or hover-dependent interactions.",
+      "Don’t turn supporting screens dark globally; their appearance follows the system.",
+      "Don’t show incident footage before the parked-review gate is satisfied.",
+      "Don’t present simulated CarPlay interaction as an entitled full CarPlay app or a camera correlation as verified identity."
+    ]
+  }
+}

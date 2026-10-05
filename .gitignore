@@ -1,0 +1,12 @@
+.build/
+DerivedData/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+.env
+.env.local
+node_modules/
+runtime-proof.local.json
+*.log
+.DS_Store
+Build/
