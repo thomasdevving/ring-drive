@@ -7,6 +7,7 @@ Environment: Apple Silicon Mac, Xcode 26.1 (17B55), Swift 6.2.1, iOS 26.1 Simula
 | Portable Swift core and native backend transport | 22 XCTest cases passed, 0 failures |
 | Local Node backend, OAuth refresh, signed webhooks and encrypted token handoff | 10 tests passed, including HTTP integration, 0 failures |
 | Native app + Live Activity/widget extension | Built, installed and launched on the iPhone simulator |
+| Physical arm64 iPhone Release compilation | Passed: app and widget built for iPhoneOS, minimum iOS 26.0; unsigned, not installed |
 | Native audio → stop → parked → AVPlayer → relock | Passed; actual speech completion and a real 20-second interval |
 | Native no-stop-result safety path | Passed; fault enabled through the native switch, no video access |
 | Native passive scenario + duplicate suppression | Passed; three duplicate deliveries suppressed |
@@ -48,3 +49,7 @@ The updated full native run passed **5 UI tests, 0 failures, 0 skips**, in 174.7
 The remote input utility was additionally exercised in installed Chrome with a fake token, at desktop width 960 and responsive width 390. Its actual browser encryption was decrypted using the matching local private key. There were no outgoing network requests or script errors. A physical phone/Safari file viewer has not been validated; file-preview apps can disable JavaScript. The page's public key can be shared; `.env.local`, private keys, encrypted token storage and local runtime receipts are ignored and excluded by the packaging script. No real Ring credentials were used in tests.
 
 The documented backend startup command also passed a local smoke check with separate client authentication. A fresh narrow Impeccable review found faint field identification; persistent readable labels resolved its one finding. Its final ship verdict applies to that scored fix. The browser detector returned no findings; native review used platform conventions. Reports are in `REMOTE_CONNECTION_REVIEW.md` and `REMOTE_CONNECTION_DESIGN_CHECK.md`.
+
+## Physical build readiness
+
+The remote-testing follow-up passed a Release build for `generic/platform=iOS`, SDK `iphoneos`, architecture `arm64`, with signing disabled. The generated app reports platform `iPhoneOS` and minimum iOS `26.0`; no signing resources are present. Both the app and widget compiled. This confirms device compilation, not installation, physical sensor validation or App Store distribution. There are no signing identities or configured development team on this Mac. The owner reports no paid Apple Developer account, so TestFlight distribution is currently unavailable. Free Personal Team testing through Xcode remains a local-Mac route. A reachable HTTPS backend is also required for real Ring calls from a remote phone.

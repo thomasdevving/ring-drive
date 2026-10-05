@@ -43,6 +43,14 @@ The project is committed as an ordinary Xcode project. To regenerate it after ad
 
 If `Build/RingDrive.app` is included in this delivery, it is an Apple Silicon **simulator** binary, not a signed iPhone distribution. Install with `xcrun simctl install booted Build/RingDrive.app`, then `xcrun simctl launch booted dev.ringdrive.demo --demo-urgent`.
 
+### Physical iPhone and remote installation
+
+The app and widget also compile for physical arm64 iPhones; the project's minimum iOS version is **26.0**. This has been checked with an unsigned Release build, not installation or hardware sensing. No development/distribution signing identity or team is configured on this Mac, and no installable IPA or TestFlight build has been produced.
+
+For local testing, connect the iPhone to your Mac, sign in to Xcode with your Apple Account, select your Personal Team for both targets under Signing & Capabilities, enable Developer Mode when prompted, and Run on the phone. Xcode may require unique bundle identifiers. Apple's free Personal Team supports local device testing with provisioning that expires after seven days. Remote TestFlight installation requires Apple Developer Program membership, distribution signing and an App Store Connect upload. External testing additionally requires the first build's beta review. See [Apple's account overview](https://developer.apple.com/help/account/basics/about-your-developer-account) and [TestFlight](https://developer.apple.com/testflight/).
+
+After installation, **Run rear-door demo** enables simulated vehicle evidence and works without the backend. Real Ring events require an authenticated HTTPS backend reachable by the phone; its `127.0.0.1` is not the Mac. No backend has been publicly deployed. Full CarPlay provisioning is a separate dependency from signing the ordinary iPhone app.
+
 ## Official Ring runtime: required submission step
 
 The [official Amazon starter](https://github.com/AmazonAppDev/ring-api-helloworld) documents a short-lived token from the [Ring Developer Playground](https://developer.amazon.com/ring/console/playground), without full app registration for this token-based development path. Sign in using your own account. If access is gated, request it through the Ring developer portal; do not substitute a community emulator and claim it is official.

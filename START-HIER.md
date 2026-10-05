@@ -2,6 +2,17 @@
 
 De native demo is bedoeld voor een iPhone-simulator in Xcode 26.1. De meegeleverde app in `Build/RingDrive.app` is voor Apple Silicon en de simulator; hij is niet ondertekend voor een fysieke iPhone.
 
+## Op je eigen iPhone
+
+Het project compileert ook voor een fysieke iPhone met **iOS 26 of nieuwer**. Er is nog geen ondertekende of op afstand installeerbare build. Een simulator-app of ongetekende app downloaden installeert hem niet op je telefoon.
+
+- Met je Mac erbij: voeg je Apple-account toe in Xcode, selecteer je Personal Team bij **Signing & Capabilities** voor app en widget, verbind je iPhone, zet Developer Mode aan wanneer Xcode daarom vraagt en kies je iPhone als Run-bestemming. Een gratis account ondersteunt lokaal testen via Xcode; provisioning verloopt na zeven dagen. Xcode kan vragen de bundle identifiers uniek te maken.
+- Op afstand: TestFlight vereist een betaald Apple Developer-lidmaatschap, signing/provisioning en een upload naar App Store Connect. Die zijn nog niet geconfigureerd. De volledige CarPlay-entitlement blijft een aparte aanvraag.
+
+Met **Run rear-door demo** kun je na installatie de volledige synthetische flow zonder backend doorlopen. Voor echte Ring-events moet de backend via HTTPS bereikbaar zijn vanaf je iPhone; `127.0.0.1` op de telefoon verwijst naar de telefoon zelf. Er is nog geen backend gepubliceerd.
+
+Bronnen: [Apple-account en lokaal testen](https://developer.apple.com/help/account/basics/about-your-developer-account), [TestFlight](https://developer.apple.com/testflight/).
+
 ## Snelste route
 
 1. Open `RingDrive.xcodeproj` in Xcode.
