@@ -13,15 +13,17 @@ public enum RingAPIError: LocalizedError {
     case missingToken, http(Int), invalidPayload, noRecording, unsafe, invalidOrigin
     public var errorDescription: String? {
         switch self {
-        case .missingToken: "Paste a fresh Ring Playground token in Connections."
-        case .http(401): "Ring token expired or was rejected. Generate a new Playground token."
+        case .missingToken: "Enter the backend client key in Demo & Ring. Ring OAuth tokens belong only on the backend."
+        case .http(401): "Backend access denied. Check the backend client key."
+        case .http(424): "Ring token expired or was rejected. Replace RING_ACCESS_TOKEN on the backend and restart it."
+        case .http(503): "Ring backend is not configured. Set its simulator token locally and start it."
         case .http(403): "Ring access denied. Check consent and device permissions."
         case .http(429): "Ring rate limit reached. Wait before retrying."
         case .http(let code): "Ring returned HTTP \(code). Retry or check your account configuration."
         case .invalidPayload: "Ring returned an unexpected response. Keep the response schema for inspection."
         case .noRecording: "Ring has no recording at this timestamp (416). A media download does not start recording."
         case .unsafe: "Video is locked until safe parking is confirmed."
-        case .invalidOrigin: "Use the official Ring API origin, or a localhost contract-test server."
+        case .invalidOrigin: "Use your HTTPS backend, or http://127.0.0.1 for the simulator. Ring API calls must run on the backend."
         }
     }
 }
@@ -74,8 +76,8 @@ public struct RingWebhook: Decodable, Sendable {
         enum CodingKeys: String, CodingKey { case source, timestamp, subType = "sub_type", componentIDs = "component_ids" }
     }
     public func observations(zone: Zone) -> [CameraEvent] {
-        guard data.type == "motion_detected" || data.type == "button_pressed" else { return [] }
-        let kind: EventKind = data.type == "button_pressed" ? .doorbell : (data.attributes.subType == "human" ? .person : .motion)
+        guard data.type == "motion_detected" || data.type == "button_press" else { return [] }
+        let kind: EventKind = data.type == "button_press" ? .doorbell : (data.attributes.subType == "human" ? .person : .motion)
         return (data.attributes.componentIDs ?? [""]).map {
             .init(id: data.id + ($0.isEmpty ? "" : ":\($0)"), accountID: meta.accountID, deviceID: data.attributes.source,
                   componentID: $0.isEmpty ? nil : $0, zone: zone, kind: kind,
@@ -84,14 +86,37 @@ public struct RingWebhook: Decodable, Sendable {
     }
 }
 
+private final class RejectRingRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+}
+
+// Native transport to our backend. OAuth credentials never enter this client.
 public struct RingAPI: Sendable {
     public static let officialOrigin = URL(string: "https://api.amazonvision.com")!
     private let base: URL
     private let token: String
     private let session: URLSession
-    public init(token: String, base: URL = officialOrigin, session: URLSession = .shared) throws {
-        guard base == Self.officialOrigin || (["localhost", "127.0.0.1"].contains(base.host ?? "") && base.scheme == "http") else { throw RingAPIError.invalidOrigin }
-        self.base = base; self.token = token; self.session = session
+    public init(backend: URL, clientToken: String, session: URLSession? = nil) throws {
+        guard let host = backend.host, !host.isEmpty, !["api.amazonvision.com", "oauth.ring.com"].contains(host.lowercased()),
+              backend.user == nil, backend.password == nil, backend.query == nil, backend.fragment == nil,
+              backend.path.isEmpty || backend.path == "/",
+              backend.scheme == "https" || (["localhost", "127.0.0.1"].contains(host) && backend.scheme == "http") else { throw RingAPIError.invalidOrigin }
+        self.base = backend.appendingPathComponent("ring"); self.token = clientToken
+        self.session = session ?? URLSession(configuration: .ephemeral, delegate: RejectRingRedirects(), delegateQueue: nil)
+    }
+    public func accountID() async throws -> String {
+        struct Response: Decodable { let data: User }
+        struct User: Decodable { let id: String; let type: String }
+        let profile = try JSONDecoder().decode(Response.self, from: await request(path: "v1/users/me"))
+        guard profile.data.type == "users", !profile.data.id.isEmpty else { throw RingAPIError.invalidPayload }
+        return profile.data.id
+    }
+    public func runtimeProof() async throws -> Data {
+        let data = try await request(path: "proof")
+        guard let proof = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              proof["verified"] as? Bool == true, proof["origin"] as? String == Self.officialOrigin.absoluteString else { throw RingAPIError.invalidPayload }
+        return data
     }
     public func devices() async throws -> [RingDevice] {
         struct Response: Decodable { let data: [RingDevice] }
@@ -118,6 +143,7 @@ public struct RingAPI: Sendable {
         var request = URLRequest(url: components.url!); request.httpMethod = method; request.httpBody = body; request.timeoutInterval = 15
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if video { request.setValue("confirmed", forHTTPHeaderField: "X-Ring-Drive-Parking") }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw RingAPIError.invalidPayload }
         if http.statusCode == 416 { throw RingAPIError.noRecording }

@@ -4,7 +4,11 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 .env
-.env.local
+.env.*
+!.env.example
+*.local.enc
+*.local.enc.tmp
+.secrets/
 node_modules/
 runtime-proof.local.json
 *.log

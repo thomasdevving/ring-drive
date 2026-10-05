@@ -21,12 +21,12 @@ final class ContractProtocol: URLProtocol, @unchecked Sendable {
 final class RingContractTests: XCTestCase {
     func api() throws -> RingAPI {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ContractProtocol.self]
-        return try RingAPI(token: "contract-token", session: URLSession(configuration: config))
+        return try RingAPI(backend: URL(string: "http://127.0.0.1:8787")!, clientToken: "contract-client-key", session: URLSession(configuration: config))
     }
-    func testOfficialDeviceEndpointAndBearerContract() async throws {
+    func testBackendDeviceEndpointAndClientBearerContract() async throws {
         ContractProtocol.responder = { request in
-            XCTAssertEqual(request.url?.absoluteString, "https://api.amazonvision.com/v1/devices")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer contract-token")
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:8787/ring/v1/devices")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer contract-client-key")
             return (200, "application/vnd.api+json", Data(#"{"data":[{"id":"device-1","attributes":{"name":"Rear camera"}}]}"#.utf8))
         }
         let devices = try await api().devices()
@@ -42,7 +42,8 @@ final class RingContractTests: XCTestCase {
         for state in [IncidentState.triaged, .notified, .explained, .stopRequested, .parkedConfirmed, .videoUnlocked] { try incident.transition(to: state, now: now, safety: verdict) }
         ContractProtocol.responder = { request in
             XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/devices/camera/media/video/download")
+            XCTAssertEqual(request.url?.path, "/ring/v1/devices/camera/media/video/download")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Ring-Drive-Parking"), "confirmed")
             let bytes: Data
             if let body = request.httpBody { bytes = body }
             else {
@@ -59,5 +60,29 @@ final class RingContractTests: XCTestCase {
         ContractProtocol.responder = { _ in (416, "application/json", Data()) }
         do { _ = try await api().clip(event: event, incident: incident, safety: verdict); XCTFail("Expected missing recording") }
         catch RingAPIError.noRecording {} catch { XCTFail("Unexpected error: \(error)") }
+    }
+    func testNativeClientRejectsDirectRingAndUnsafeBackends() throws {
+        for origin in ["https://api.amazonvision.com", "https://oauth.ring.com", "http://public.example.com", "https://user:pass@example.com", "https://example.com?token=secret", "https://example.com/unexpected"] {
+            XCTAssertThrowsError(try RingAPI(backend: URL(string: origin)!, clientToken: "client"))
+        }
+        XCTAssertNoThrow(try RingAPI(backend: URL(string: "https://backend.example.com")!, clientToken: "client"))
+    }
+    func testBackendAccountIdentityAndUnverifiedReceipt() async throws {
+        ContractProtocol.responder = { request in
+            XCTAssertEqual(request.url?.path, "/ring/v1/users/me")
+            return (200,"application/json",Data(#"{"data":{"id":"ring-account","type":"users","attributes":{}}}"#.utf8))
+        }
+        let account = try await api().accountID(); XCTAssertEqual(account,"ring-account")
+        ContractProtocol.responder = { _ in (200,"application/json",Data(#"{"origin":"https://api.amazonvision.com","verified":false,"calls":[]}"#.utf8)) }
+        do { _ = try await api().runtimeProof(); XCTFail("Test transport must not establish runtime proof") }
+        catch RingAPIError.invalidPayload {} catch { XCTFail("Unexpected error: \(error)") }
+    }
+    func testOfficialButtonPressWebhookIsDecoded() throws {
+        let body = #"{"meta":{"request_id":"req","account_id":"account"},"data":{"id":"doorbell","type":"button_press","attributes":{"source":"front","timestamp":1780000000000}}}"#
+        let event = try JSONDecoder().decode(RingWebhook.self, from: Data(body.utf8))
+        XCTAssertEqual(event.observations(zone: .front).first?.kind, .doorbell)
+        XCTAssertEqual(event.observations(zone: .front).first?.accountID, "account")
+        let unsupported = try JSONDecoder().decode(RingWebhook.self, from: Data(body.replacingOccurrences(of: "button_press", with: "button_pressed").utf8))
+        XCTAssertTrue(unsupported.observations(zone: .front).isEmpty)
     }
 }

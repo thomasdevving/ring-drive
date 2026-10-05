@@ -24,9 +24,11 @@ test('Signed events, duplicate retries, stale data, account isolation and client
     assert.equal((await (await send(e)).json()).duplicate,true);
     const wrong = structuredClone(e); wrong.meta.account_id='other'; assert.equal((await send(wrong)).status,403);
     const stale = structuredClone(e); stale.data.id='old'; stale.data.attributes.timestamp-=181000; assert.equal((await (await send(stale)).json()).stale,true);
+    const doorbell = structuredClone(e); doorbell.data.id='bell'; doorbell.data.type='button_press'; assert.equal((await send(doorbell)).status,200);
+    const unsupported = structuredClone(e); unsupported.data.id='unsupported'; unsupported.data.type='button_pressed'; assert.equal((await (await send(unsupported)).json()).ignored,true);
     assert.equal((await fetch(base+'/events')).status,401);
     const get = await fetch(base+'/events',{headers:{Authorization:'Bearer client-key'}});
-    const body = await get.json(); assert.equal(body.events.length,1); assert.equal(body.events[0].data.attributes.source,'camera');
-    const retry = await fetch(base+'/events',{headers:{Authorization:'Bearer client-key'}}); assert.equal((await retry.json()).events.length,1);
+    const body = await get.json(); assert.equal(body.events.length,2); assert.equal(body.events[0].data.attributes.source,'camera');
+    const retry = await fetch(base+'/events',{headers:{Authorization:'Bearer client-key'}}); assert.equal((await retry.json()).events.length,2);
   } finally { await new Promise(resolve=>server.close(resolve)); }
 });

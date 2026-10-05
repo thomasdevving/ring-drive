@@ -4,11 +4,11 @@ A native iPhone hackathon demo: meaningful home activity → spoken explanation 
 
 Nederlandse startinstructies: [START-HIER.md](START-HIER.md).
 
-**Current status:** the local synthetic demo is runnable without a Ring device or CarPlay entitlement. Official Ring REST calls and a signed webhook relay are implemented, but **a successful authenticated Ring runtime demonstration is still required before submission**. No Ring credentials were available during development. No Apple CarPlay entitlement has been granted or assumed.
+**Current status:** the local synthetic demo is runnable without a Ring device or CarPlay entitlement. Official Ring REST calls now run server-to-server through the local Node backend; the native app never receives Ring OAuth credentials. The owner has simulator access; the token has not yet been received. **Successful authenticated Ring runtime and an event-to-driver recording remain required before submission**. No Apple CarPlay entitlement has been granted or assumed.
 
 ## Quick start
 
-Requirements: macOS, Xcode 26 with the iOS 26 simulator, Python 3 for regenerating the project, Node 22+ for the optional relay. No paid cloud service or third-party package is needed.
+Requirements: macOS, Xcode 26 with the iOS 26 simulator, Python 3 for regenerating the project, Node 22+ for the official Ring backend. No paid cloud service or third-party package is needed.
 
 1. Open `RingDrive.xcodeproj` in Xcode.
 2. Select **RingDrive → an iPhone simulator**, then Run. The app and WidgetKit extension are included.
@@ -47,21 +47,22 @@ If `Build/RingDrive.app` is included in this delivery, it is an Apple Silicon **
 
 The [official Amazon starter](https://github.com/AmazonAppDev/ring-api-helloworld) documents a short-lived token from the [Ring Developer Playground](https://developer.amazon.com/ring/console/playground), without full app registration for this token-based development path. Sign in using your own account. If access is gated, request it through the Ring developer portal; do not substitute a community emulator and claim it is official.
 
-1. Open the official Playground and **Generate Token**. Use its official simulated devices if offered to your account, or a supported real Ring device. We did not verify account-specific simulator availability.
-2. In the native app, open **Demo & Ring → Official Ring runtime**. Paste the token into the secure field and tap **Connect & discover Ring devices**. The app actually calls `GET https://api.amazonvision.com/v1/devices` using Bearer authentication.
-3. Assign each camera a Front/Side/Rear zone. Leave non-camera devices Unknown. This small demo maps zones per device; multi-camera module-specific zone mapping is a follow-up.
-4. Trigger official simulator/device activity. Tap **Poll Ring event history**, or start foreground polling every eight seconds. The app calls `GET /v1/history/devices/{id}/events?event_types=motion.human,ding` and feeds fresh observations into the same Swift triage pipeline. A side observation, then repeated rear observations spanning at least sixty seconds, qualifies for urgency.
-5. After parking confirmation, review an actual Ring incident. The app makes `POST /v1/devices/{id}/media/video/download` with epoch-millisecond timestamp and duration, optional component selection, and reads the returned MP4 bytes into AVPlayer. A `416` means no recording exists. This endpoint **does not start recording**.
-6. Capture the official console, native runtime status, received incident and code call sites in the submission video. Merely showing local synthetic scenarios or a configured token is not proof of Ring runtime usage.
+1. Open the official Playground and **Generate Token**. Use the access token value without the `Bearer ` prefix. One user-scoped access token is used for Device List, Event History and Users API; there is no separate token per endpoint.
+2. Run `node scripts/setup_ring.mjs` once. It creates private, Git-ignored `Relay/.env.local` without overwriting existing configuration. Fill only `RING_ACCESS_TOKEN` locally for the simulator path. Never paste credentials into chat. Start the backend with `cd Relay && node --env-file=.env.local server.mjs`. It binds only to `127.0.0.1:8787`.
+3. In **Demo & Ring → Official Ring runtime**, use backend URL `http://127.0.0.1:8787` and the separate `RELAY_CLIENT_TOKEN` generated in the local file. Tap **Connect & discover Ring devices**. The backend actually calls Ring's `GET /v1/users/me` and `GET /v1/devices`. It keeps only the account identity from the user profile; email, name and phone are not forwarded. The backend client key is stored in iOS Keychain; it is not a Ring token.
+4. Assign each camera a Front/Side/Rear zone. Leave non-camera devices Unknown. This small demo maps zones per device; multi-camera module-specific zone mapping is a follow-up.
+5. Trigger official simulator/device activity. Tap **Poll Ring event history**, or start foreground polling every eight seconds. The backend calls `GET /v1/history/devices/{id}/events?event_types=motion.human,ding` and the app feeds fresh observations into the same Swift triage pipeline, bound to the verified account ID. A side observation, then repeated rear observations spanning at least sixty seconds, qualifies for urgency.
+6. After parking confirmation, review an actual Ring incident. The native safety guard allows the backend request only with a fresh parked verdict. The backend validates the consented device and makes `POST /v1/devices/{id}/media/video/download` with epoch-millisecond timestamp and duration, optional component selection, and returns the MP4 bytes to AVPlayer. A `416` means no recording exists. This endpoint **does not start recording**. A native parking marker is an additional request check, not independently attested vehicle telemetry.
+7. Capture the official console, native runtime status, received incident and code call sites in the submission video. Merely showing local synthetic scenarios or a configured token is not proof of Ring runtime usage.
 
-Tokens are stored in iOS Keychain. No token is printed, logged or embedded in the source. Playground tokens expire; generate a fresh one when the app reports 401. For an independent connectivity proof:
+All calls to Amazon Vision and Ring OAuth originate on the backend, as required by the [official API documentation](https://developer.amazon.com/docs/ring/api-documentation.html). Playground access tokens expire; replace `RING_ACCESS_TOKEN` in the local file and restart the backend. Client ID and client secret are unnecessary for this short-lived simulator path. If Ring also issued a refresh token for the registered app, fill the optional refresh/client fields; the backend refreshes once on expiry, verifies the same account and saves rotated credentials using AES-256-GCM in private, ignored `tokens.local.enc`. The generated encryption key stays in `.env.local`. For an independent server-side connectivity proof:
 
 ```sh
-# Set RING_ACCESS_TOKEN in your local shell; do not commit it or put it in screenshots.
+# Reads Relay/.env.local without printing its contents.
 node scripts/verify_ring.mjs
 ```
 
-This writes `runtime-proof.local.json` only after successful official discovery, with redacted identifiers and HTTP result counts. The native app writes a similar local discovery receipt in its Documents directory. A receipt alone does not demonstrate the event → driver experience; record that too.
+This writes `runtime-proof.local.json` only after successful official user identity and device discovery, with redacted identifiers and HTTP result counts. History failures are recorded honestly and cause a nonzero exit. The native app can save the backend's redacted receipt; injected test transports cannot create official runtime proof. A receipt alone does not demonstrate the event → driver experience; record that too. Packaging excludes `.env.local`, encrypted tokens and local receipts.
 
 ### Signed webhook relay (optional)
 
@@ -70,14 +71,28 @@ The native app can receive Ring events through a minimal local relay. It verifie
 Configure locally:
 
 ```sh
-export RING_HMAC_KEY='YOUR_PARTNER_HMAC_KEY'
-export RING_ACCOUNT_ID='YOUR_RING_ACCOUNT_ID'
-export RELAY_CLIENT_TOKEN='YOUR_RANDOM_LOCAL_CLIENT_SECRET'
+# Fill RING_HMAC_KEY in Relay/.env.local; RING_ACCOUNT_ID is optional
+# and, when supplied, must match the authenticated Users API identity.
 cd Relay
-node server.mjs
+node --env-file=.env.local server.mjs
 ```
 
-The relay binds to `127.0.0.1:8787`. Configure your registered Ring app to deliver to an HTTPS tunnel's `/webhooks/ring`. Keep `/events` private; it requires the separate client token. In the simulator app, enter `http://127.0.0.1:8787` and that client token under **Signed webhook relay**, then Fetch. Real phones need an HTTPS relay accessible from the phone. Exposing a relay or registering a webhook is a separate deployment/configuration step, not performed here.
+Connect the backend account first; unsigned, unsupported, stale or wrong-account deliveries are never promoted to incidents. Official event types are `motion_detected` and `button_press`. Configure your registered Ring app to deliver to an HTTPS tunnel's `/webhooks/ring`. Expose only that path for the webhook demo. `/events`, `/ring/*` and runtime receipts require the separate client key. Use **Fetch signed Ring events** on the same verified native connection. Real phones need an HTTPS backend accessible from the phone. Exposing a backend or registering a webhook is a separate deployment/configuration step, not performed here.
+
+### Registered-app linking and documentation MCP
+
+For remote token delivery, `node scripts/create_token_input.mjs` creates a standalone `../Ring-token-invoer.html` containing only this workspace's public key. Download and open it locally in a current browser, paste the access token there and send only the `RINGDRIVE-TOKEN-BOX:` encrypted envelope back. The page uses WebCrypto RSA-OAEP SHA-256 to wrap a new AES-256-GCM key for each message; it has no imports, storage or network calls and a restrictive CSP. Its private key remains in ignored `Relay/.secrets/` with private permissions. `scripts/import_ring_token.mjs` imports an envelope from `Relay/.secrets/incoming.local.txt` without printing plaintext. This is a local demo handoff utility, not a deployed identity service. File-preview viewers may disable JavaScript; use a real browser on a computer when needed.
+
+The demo uses a user-consented simulator access token. It does not implement a complete production Ring Appstore linking portal. Client ID and secret alone are not a Bearer token, and no undocumented `client_credentials` grant is used. Standard Ring linking additionally requires public HTTPS token-exchange/account-link endpoints, partner sign-in, time-bound HMAC nonce matching, then POST and mandatory PATCH to complete app integration. Partner-initiated PKCE is invitation-only; do not assume this app is allowlisted. Refresh support here is backend-only and does not claim those linking steps have been completed.
+
+The [Ring knowledge MCP](https://developer.amazon.com/docs/ring/ring-mcp.html) answers documentation questions. It is separate from camera API access and is not hackathon runtime proof. The supplied JSON can be used by the clients documented by Ring. Codex's documented equivalent is:
+
+```toml
+[mcp_servers.ring-appstore-knowledge-mcp-server]
+url = "https://knowledge.appstore-mcp.ring.amazon.dev/mcp"
+```
+
+See [Codex MCP setup](https://developers.openai.com/learn/docs-mcp) for the supported configuration/CLI route. Configuration alone does not make tools available in an already running chat. This demo does not install or claim an active MCP connection.
 
 ## Architecture
 
@@ -86,8 +101,8 @@ flowchart TD
   R[Official Ring Playground / camera] --> API[Ring REST API]
   R --> W[Signed Ring webhook]
   W --> Relay[Local Node relay: verify, isolate, deduplicate]
-  API --> Native[Native iOS client]
-  Relay --> Native
+  API --> Relay
+  Relay --> Native[Native iOS client]
   Fixtures[Labeled synthetic scenarios] --> Native
   Native --> Core[Portable Swift incident core]
   Core --> Triage[Deterministic triage + reasons]
@@ -101,7 +116,7 @@ flowchart TD
   Guard --> Video[AVPlayer: parked iPhone review only]
 ```
 
-`Sources/RingDriveCore` has no UI dependency. `iOS/App` owns services and effect orchestration. `iOS/Shared` defines ActivityKit payloads. `iOS/Widgets` presents system surfaces. `iOS/CarPlay` is compile-gated. `Relay` handles inbound webhooks. `scripts` contains reproducible project/media generation and genuine Ring connectivity verification.
+`Sources/RingDriveCore` has no UI dependency and includes the native backend transport. `iOS/App` owns services and effect orchestration. `iOS/Shared` defines ActivityKit payloads. `iOS/Widgets` presents system surfaces. `iOS/CarPlay` is compile-gated. `Relay` owns Ring credentials, server-to-server REST/OAuth refresh and signed inbound webhooks. `scripts` contains reproducible project/media generation, credential setup, safe packaging and genuine Ring connectivity verification.
 
 ```
 DETECTED → TRIAGED → NOTIFIED → EXPLAINED → STOP_REQUESTED
@@ -152,7 +167,7 @@ The app posts standard iPhone local notifications, not a fabricated WhatsApp-sty
 2. Apply for the appropriate [CarPlay entitlement](https://developer.apple.com/carplay/). A security use case is not automatically eligible for a supported category; Apple's decision is required.
 3. Once approved, use an approved App ID, entitlement and provisioning profile. Set `SWIFT_ACTIVE_COMPILATION_CONDITIONS` to include `FULL_CARPLAY` for the app target and add a `CPTemplateApplicationSceneSessionRoleApplication` scene configuration with `CarPlaySceneDelegate`. Do not invent an entitlement key/category to make an unapproved target appear.
 4. Validate the supported templates and interactions on Apple's CarPlay Simulator and real hardware. The scene currently provides voice explanation and safe-stop actions; video review remains on the parked iPhone.
-5. For real background events, add persistent backend event storage and APNs/ActivityKit push updates. Foreground polling and local notifications are sufficient for this demo, not reliable suspended-app delivery. Production OAuth linking/refresh, privacy policy and Ring Appstore certification are outside this MVP.
+5. For real background events, add persistent backend event storage and APNs/ActivityKit push updates. Foreground polling and local notifications are sufficient for this demo, not reliable suspended-app delivery. A production account-link portal, multi-user credential storage, privacy policy and Ring Appstore certification are outside this MVP; single-account backend refresh is implemented when matching credentials are supplied.
 
 ## Demo script — 2 minutes 45 seconds
 

@@ -28,7 +28,9 @@ import UserNotifications
     @Published var handoffFailure = false
     @Published var uncertainParking = false
     @Published var offlineStops = true
-    @Published var relayURL = "http://127.0.0.1:8787"
+    @Published var relayURL = "http://127.0.0.1:8787" {
+        didSet { UserDefaults.standard.set(relayURL, forKey: "ring-backend-url") }
+    }
     @Published var duplicateCount = 0
     private var safety = ParkingSafety(allowsSimulation: true)
     private var ledger = EventLedger()
@@ -41,9 +43,19 @@ import UserNotifications
     private var clipGeneration = 0
     private var lastActivityState = ""
     var canReview: Bool { VideoGuard.permits(incident: current, safety: safety.verdict(now: Date())) }
-    var token: String { TokenVault.read(key: "ring-token") }
+    var backendToken: String { TokenVault.read(key: "relay-token") }
+    private var ringAccountID: String?
+    private var connectedAPI: RingAPI?
+    private var connectedBackend: URL?
+    private func ringAPI() throws -> RingAPI {
+        guard let connectedAPI else { throw RingAPIError.missingToken }
+        return connectedAPI
+    }
     private var storage: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("incidents.json") }
     init() {
+        relayURL = UserDefaults.standard.string(forKey: "ring-backend-url") ?? relayURL
+        // Remove the obsolete direct-API credential saved by earlier demo builds.
+        TokenVault.save("", key: "ring-token")
         #if !targetEnvironment(simulator)
         demoMode = false; safety = ParkingSafety()
         #endif
@@ -167,7 +179,7 @@ import UserNotifications
         }
         guard let event = incident.events.last else { return }
         do {
-            let api = try RingAPI(token: token)
+            let api = try ringAPI()
             let bytes = try await api.clip(event: event, incident: incident, safety: safety.verdict(now: Date()))
             guard generation == clipGeneration, current?.id == incident.id, canReview else { return }
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("ring-review.mp4")
@@ -181,31 +193,36 @@ import UserNotifications
         clipGeneration += 1; player?.pause(); player?.replaceCurrentItem(with: nil); player = nil; showingVideo = false
         try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("ring-review.mp4"))
     }
-    func connectRing(token: String) async {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        TokenVault.save(trimmed, key: "ring-token"); loadingRing = true; defer { loadingRing = false }
+    func connectRing(clientToken: String) async {
+        let trimmed = clientToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        TokenVault.save(trimmed, key: "relay-token"); loadingRing = true; defer { loadingRing = false }
+        stopPolling(); devices = []; ringAccountID = nil; connectedAPI = nil; connectedBackend = nil
+        closeVideo(); speech.cancel(); safety.invalidate(); tick()
         do {
-            let api = try RingAPI(token: trimmed); devices = try await api.devices()
+            guard let backend = URL(string: relayURL) else { throw RingAPIError.invalidOrigin }
+            let api = try RingAPI(backend: backend, clientToken: trimmed)
+            let account = try await api.accountID(); let found = try await api.devices()
+            let proof = try await api.runtimeProof()
             // Re-linking can mean a different household. Never correlate across token sessions.
             if let current { history.insert(current, at: 0) }
             current = nil; ledger = EventLedger(); duplicateCount = 0; closeVideo(); speech.cancel(); safety.invalidate()
-            runtimeStatus = "Official Ring runtime · GET /v1/devices succeeded · \(devices.count) devices"
-            let proof: [String: String] = ["origin": RingAPI.officialOrigin.absoluteString, "endpoint": "/v1/devices", "status": "200", "at": ISO8601DateFormatter().string(from: Date())]
+            ringAccountID = account; devices = found; connectedAPI = api; connectedBackend = backend
+            runtimeStatus = "Official Ring via backend · \(devices.count) devices discovered"
             let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("runtime-proof.local.json")
-            try JSONSerialization.data(withJSONObject: proof, options: .prettyPrinted).write(to: url)
+            try proof.write(to: url)
         } catch { runtimeStatus = "Ring not verified"; message = error.localizedDescription }
     }
     func setZone(_ device: String, _ zone: Zone) { zones[device] = zone; UserDefaults.standard.set(zones.mapValues(\.rawValue), forKey: "zones") }
     func pollRing() async {
-        guard !devices.isEmpty else { message = "Connect a Ring Playground token first."; return }
+        guard !devices.isEmpty, let account = ringAccountID else { message = "Connect the Ring backend and map its cameras first."; return }
         loadingRing = true; defer { loadingRing = false }
         do {
-            let api = try RingAPI(token: token)
+            let api = try ringAPI()
             var events: [CameraEvent] = []
             for device in devices where zones[device.id] != nil && zones[device.id] != .unknown {
                 let page = try await api.history(deviceID: device.id)
                 events += page.data.filter { Date().timeIntervalSince1970 - $0.attributes.start / 1000 <= 180 }
-                    .map { $0.observation(deviceID: device.id, accountID: "current-ring-token", zone: zones[device.id] ?? .unknown, personFiltered: $0.attributes.eventType != "ding") }
+                    .map { $0.observation(deviceID: device.id, accountID: account, zone: zones[device.id] ?? .unknown, personFiltered: $0.attributes.eventType != "ding") }
             }
             receive(events)
             runtimeStatus = "Official Ring runtime · event history received · \(events.count) fresh observations"
@@ -223,14 +240,16 @@ import UserNotifications
     }
     func stopPolling() { pollTask?.cancel(); pollTask = nil }
     func pollRelay() async {
-        guard let url = URL(string: relayURL)?.appendingPathComponent("events"), ["http", "https"].contains(url.scheme ?? "") else { message = "Enter a valid relay URL."; return }
+        guard let backend = connectedBackend,
+              let account = ringAccountID else { message = "Connect and verify the backend account first."; return }
+        let url = backend.appendingPathComponent("events")
         var request = URLRequest(url: url); request.setValue("Bearer \(TokenVault.read(key: "relay-token"))", forHTTPHeaderField: "Authorization"); request.timeoutInterval = 10
         do {
             let (bytes, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { message = "Relay access failed. Check its client token and address."; return }
             struct Envelope: Decodable { let events: [RingWebhook] }
             let batch = try JSONDecoder().decode(Envelope.self, from: bytes)
-            receive(batch.events.flatMap { $0.observations(zone: zones[$0.data.attributes.source] ?? .unknown) })
+            receive(batch.events.filter { $0.meta.accountID == account }.flatMap { $0.observations(zone: zones[$0.data.attributes.source] ?? .unknown) })
             runtimeStatus = "Signed Ring webhooks received from configured relay"
         } catch { message = "Relay unreachable. Start the local relay and check its URL." }
     }

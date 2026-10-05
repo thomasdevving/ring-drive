@@ -4,7 +4,7 @@ final class RingDriveUITests: XCTestCase {
     var app: XCUIApplication!
     override func setUp() {
         continueAfterFailure = false
-        app = XCUIApplication(); app.launchArguments = ["--demo-urgent"]; app.launch()
+        app = XCUIApplication(); app.launchArguments = ["--demo-urgent", "-ring-backend-url", "http://127.0.0.1:8787"]; app.launch()
         XCTAssertTrue(app.buttons["listen"].waitForExistence(timeout: 10))
     }
     func visible(_ id: String) -> XCUIElement {
@@ -54,6 +54,36 @@ final class RingDriveUITests: XCTestCase {
         XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS 'No nearby'")).firstMatch.exists)
         app.alerts.buttons["OK"].tap()
+        XCTAssertFalse(app.buttons["reviewVideo"].exists)
+    }
+    func testConnectionFormRejectsDirectRingOrigin() {
+        app.tabBars.buttons["Demo & Ring"].tap()
+        let connect = visible("connectBackend")
+        let backend = app.textFields["backendURL"]
+        for _ in 0..<3 where !backend.isHittable { app.swipeDown() }
+        XCTAssertTrue(backend.isHittable)
+        XCTAssertTrue(app.staticTexts["Backend URL"].exists)
+        XCTAssertTrue(app.staticTexts["Backend client key"].exists)
+        XCTAssertTrue(app.secureTextFields["backendKey"].exists)
+        screenshot("backend-connection-settings")
+        let original = backend.value as? String ?? "http://127.0.0.1:8787"
+        backend.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.75)).tap()
+        backend.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,count:original.count))
+        XCTAssertEqual(backend.value as? String, "", "Clear the field before typing the forbidden origin")
+        backend.typeText("https://api.amazonvision.com")
+        XCTAssertEqual(backend.value as? String, "https://api.amazonvision.com")
+        for _ in 0..<3 where !connect.isHittable { app.swipeUp() }
+        connect.tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout:5))
+        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format:"label CONTAINS 'must run on the backend'")).firstMatch.exists)
+        app.alerts.buttons["OK"].tap()
+        for _ in 0..<3 where !backend.isHittable { app.swipeDown() }
+        backend.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.75)).tap()
+        backend.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,count:"https://api.amazonvision.com".count))
+        XCTAssertEqual(backend.value as? String, "")
+        backend.typeText(original)
+        XCTAssertEqual(backend.value as? String, original)
+        app.tabBars.buttons["Drive"].tap()
         XCTAssertFalse(app.buttons["reviewVideo"].exists)
     }
     func testPassiveScenarioAndDuplicateSuppression() {

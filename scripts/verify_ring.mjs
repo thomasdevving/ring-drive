@@ -1,15 +1,33 @@
 import {writeFile} from 'node:fs/promises';
-const token = process.env.RING_ACCESS_TOKEN;
-if (!token) { console.error('Set RING_ACCESS_TOKEN locally using a fresh official Playground token. No token is printed.'); process.exit(2); }
-const base = 'https://api.amazonvision.com';
-const response = await fetch(base+'/v1/devices',{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});
-if (!response.ok) { console.error(`Official Ring API returned ${response.status}; runtime proof not created.`); process.exit(1); }
-const devices = await response.json();
-const calls = [{method:'GET',endpoint:'/v1/devices',status:response.status,count:devices.data?.length ?? 0}];
-for (const device of (devices.data ?? []).slice(0,3)) {
-  const path = `/v1/history/devices/${encodeURIComponent(device.id)}/events?event_types=motion.human,ding`;
-  const r = await fetch(base+path,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});
-  calls.push({method:'GET',endpoint:'/v1/history/devices/[redacted]/events',status:r.status,count:r.ok?(await r.json()).data?.length ?? 0:0});
+import {loadEnvFile} from 'node:process';
+import {RingClient,RingError,EncryptedTokenStore,RING_ORIGIN} from '../Relay/ring-client.mjs';
+
+try { loadEnvFile(new URL('../Relay/.env.local',import.meta.url)); }
+catch (error) { if (error.code !== 'ENOENT') throw error; }
+if (!process.env.RING_ACCESS_TOKEN?.trim()) {
+  console.error('Fill RING_ACCESS_TOKEN in Relay/.env.local. No credential values are displayed.'); process.exit(2);
 }
-await writeFile('runtime-proof.local.json', JSON.stringify({origin:base,at:new Date().toISOString(),calls},null,2));
-console.log('Successful official Ring discovery recorded in runtime-proof.local.json. No credentials or device identifiers included. Trigger and show an event in the app for the submission.');
+const store = process.env.TOKEN_STORE_KEY ? new EncryptedTokenStore(new URL('../Relay/tokens.local.enc',import.meta.url).pathname,process.env.TOKEN_STORE_KEY) : undefined;
+const ring = new RingClient({accessToken:process.env.RING_ACCESS_TOKEN,refreshToken:process.env.RING_REFRESH_TOKEN,
+  clientID:process.env.RING_CLIENT_ID,clientSecret:process.env.RING_CLIENT_SECRET,expectedAccount:process.env.RING_ACCOUNT_ID,store});
+const calls = []; let historyFailed = false;
+try {
+  await ring.profile(); calls.push({method:'GET',endpoint:'/v1/users/me',status:200,count:1});
+  const devices = await ring.devices(); calls.push({method:'GET',endpoint:'/v1/devices',status:200,count:devices.data.length});
+  for (const device of devices.data.slice(0,3)) {
+    try {
+      const history = await ring.history(device.id);
+      calls.push({method:'GET',endpoint:'/v1/history/devices/[redacted]/events',status:200,count:history.data.length});
+    } catch (error) {
+      historyFailed = true;
+      calls.push({method:'GET',endpoint:'/v1/history/devices/[redacted]/events',status:error instanceof RingError ? error.status : 502,count:0});
+    }
+  }
+  await writeFile(new URL('../runtime-proof.local.json',import.meta.url),JSON.stringify({origin:RING_ORIGIN,at:new Date().toISOString(),
+    calls,discoveryVerified:true,historyVerified:!historyFailed && devices.data.length>0,eventToDriverDemoVerified:false},null,2),{mode:0o600});
+  console.log(`Official Ring runtime: user identity and ${devices.data.length} devices verified. History ${historyFailed?'needs attention':'checked'}. Redacted receipt saved; no identifiers or credentials printed.`);
+  if (historyFailed) process.exitCode = 1;
+} catch (error) {
+  console.error(error instanceof RingError ? error.message : 'Official Ring request failed. Check network access and local configuration. No upstream payload or credentials displayed.');
+  process.exitCode = 1;
+}

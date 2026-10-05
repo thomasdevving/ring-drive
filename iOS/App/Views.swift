@@ -235,7 +235,6 @@ struct IncidentDetailView: View {
 
 struct DemoView: View {
     @EnvironmentObject var model: AppModel
-    @State private var token = ""
     @State private var relayToken = ""
     var body: some View {
         Form {
@@ -265,12 +264,21 @@ struct DemoView: View {
             Section("Official Ring runtime") {
                 Text(model.runtimeStatus).font(.subheadline)
                 Link("Open Ring Developer Playground", destination: URL(string: "https://developer.amazon.com/ring/console/playground")!).frame(minHeight: 44)
-                SecureField("Short-lived Playground token", text: $token).textInputAutocapitalization(.never).autocorrectionDisabled()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Backend URL").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    TextField("", text: $model.relayURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        .accessibilityLabel("Backend URL").accessibilityIdentifier("backendURL").frame(minHeight: 28)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Backend client key").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    SecureField("", text: $relayToken).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityLabel("Backend client key").accessibilityIdentifier("backendKey").frame(minHeight: 28)
+                }
                 Button(model.loadingRing ? "Connecting…" : "Connect & discover Ring devices") {
-                    let value = token.isEmpty ? model.token : token
-                    Task { await model.connectRing(token: value); token = "" }
-                }.disabled(model.loadingRing).frame(minHeight: 44)
-                Text("Saved in iOS Keychain. Never included in logs or source. Generate a fresh token when it expires.")
+                    let value = relayToken.isEmpty ? model.backendToken : relayToken
+                    Task { await model.connectRing(clientToken: value); relayToken = "" }
+                }.disabled(model.loadingRing).frame(minHeight: 44).accessibilityIdentifier("connectBackend")
+                Text("Use RELAY_CLIENT_TOKEN from your local setup. Ring OAuth tokens and app secrets stay on the backend. The client key is saved in iOS Keychain.")
                     .font(.footnote).foregroundStyle(.secondary)
                 ForEach(model.devices) { device in
                     Picker(device.displayName, selection: Binding(get: { model.zones[device.id] ?? .unknown }, set: { model.setZone(device.id, $0) })) {
@@ -282,12 +290,10 @@ struct DemoView: View {
                 Button("Stop polling") { model.stopPolling() }.frame(minHeight: 44)
             }
             Section("Signed webhook relay · optional") {
-                TextField("Relay base URL", text: $model.relayURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                SecureField("Relay client token", text: $relayToken).textInputAutocapitalization(.never)
                 Button("Fetch signed Ring events") {
-                    if !relayToken.isEmpty { TokenVault.save(relayToken, key: "relay-token"); relayToken = "" }
                     Task { await model.pollRelay() }
                 }.frame(minHeight: 44)
+                Text("Uses the same verified backend connection. Requires a registered HMAC key and an HTTPS webhook endpoint.").font(.footnote).foregroundStyle(.secondary)
             }
             Section("System surfaces") {
                 Button("Enable iPhone notifications") { Task { await model.enableNotifications() } }.frame(minHeight: 44)

@@ -120,7 +120,7 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(observations[0].source, .ringWebhook)
     }
     func testUnsafeMediaFailsBeforeNetwork() async throws {
-        let api = try RingAPI(token: "unused")
+        let api = try RingAPI(backend: URL(string: "http://127.0.0.1:8787")!, clientToken: "unused")
         do { _ = try await api.clip(event: DemoScenario.rearDoor.events(now: now)[0], incident: incident(), safety: ParkingSafety().verdict(now: now)); XCTFail("Unexpected media access") }
         catch RingAPIError.unsafe {} catch { XCTFail("Wrong error: \(error)") }
     }
