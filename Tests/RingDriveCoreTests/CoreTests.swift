@@ -49,7 +49,7 @@ final class CoreTests: XCTestCase {
         for state in [IncidentState.triaged, .notified, .explained, .stopRequested, .navigating, .parkedConfirmed, .videoUnlocked] {
             try i.transition(to: state, now: now.addingTimeInterval(20), safety: v)
         }
-        XCTAssertEqual(i.audit.map(\.state), IncidentState.allCases)
+        XCTAssertEqual(i.audit.map(\.state), [.detected, .triaged, .notified, .explained, .stopRequested, .navigating, .parkedConfirmed, .videoUnlocked])
         XCTAssertTrue(VideoGuard.permits(incident: i, safety: v, now: now.addingTimeInterval(20)))
         XCTAssertFalse(VideoGuard.permits(incident: i, safety: v, now: now.addingTimeInterval(24)))
         i.revokeVideo(now: now, reason: "motion resumed")

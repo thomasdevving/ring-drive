@@ -214,9 +214,21 @@ flowchart TD
 `Timeline.swift` provides stable chronological item identities and the shared parked-evidence guard. `IncidentUpdates.swift` holds inspectable episode, resolution and interruption policy. `Incident` persists every assessment's original evidence references, status, required explanation revision and alert cooldown alongside its existing transition audit.
 
 ```
-DETECTED → TRIAGED → NOTIFIED → EXPLAINED → STOP_REQUESTED
-    → NAVIGATING → PARKED_CONFIRMED → VIDEO_UNLOCKED
+DETECTED → TRIAGED → NOTIFIED → EXPLAINED ─┬─ NOTIFY_HOUSEHOLD → HOUSEHOLD_NOTIFIED ─┐
+                                           ├─ CALL_CONTACT     → CONTACT_CALLED     ─┤ (further choices)
+                                           ├─ FIND_STOP        → STOP_REQUESTED → NAVIGATING → PARKED_CONFIRMED → VIDEO_UNLOCKED
+                                           └─ DISMISS          → DISMISSED (final)
 ```
+
+After the spoken explanation the driver makes explicit choices. Each incident type defines what it offers (`ChoicePolicy` in `Sources/RingDriveCore/DriverChoices.swift`, mirrored in `Relay/state-machine.mjs`):
+
+| Incident | Offered choices |
+|---|---|
+| Absence rule (`ABSENCE`) | Notify household, Call a contact, Dismiss. No stop or video path; absence incidents can never unlock video. |
+| Urgent camera incident | Find a safe place to stop, Notify household, Call a contact, Dismiss |
+| Review or passive camera incident, or resolved activity | Find a safe place to stop, Dismiss |
+
+From `HOUSEHOLD_NOTIFIED` or `CONTACT_CALLED` the driver can still take the other offered choices, find a stop, or dismiss. Every choice is stored as an audit entry with its timestamp and choice (`AuditEntry.choice`), shown in the parked timeline as "Driver chose: …", and mirrored to the backend (`POST /incidents/{id}/audit`, idempotent per entry id). The backend enforces the table strictly for absence incidents, which it owns, and records camera-incident transitions as reported by the phone, which owns the parking-safety checks. Escalated or reopened evidence returns the incident to `NOTIFIED`: the driver hears the update and chooses again. Video stays locked while driving; the parked logic is unchanged.
 
 `EXPLAINED` requires completion of spoken audio; a canceled utterance cannot advance it. A failed Maps handoff stays in `STOP_REQUESTED`; retry is supported. A person already parked may skip navigation after requesting a stop. Motion, stale samples, app backgrounding, escalation or reopened activity revoke video. Escalation and reopened activity require a fresh explanation; continued activity updates the same incident quietly. No player or thumbnail is instantiated while locked; Picture in Picture is disabled; media access checks safety before the network request and again before presentation.
 

@@ -50,6 +50,9 @@ import UserNotifications
     private var speechGeneration = 0
     private var lastActivityState = ""
     private var syncTask: Task<Void, Never>?
+    private var householdTask: Task<Void, Never>?
+    /// Audit entries already accepted by the backend timeline.
+    private var mirroredAudit: Set<UUID> = []
     /// Household backend client; nil until a backend URL and client key are configured.
     var household: HouseholdAPI? {
         guard let url = URL(string: relayURL) else { return nil }
@@ -85,6 +88,7 @@ import UserNotifications
         if !demoMode { motion.start() }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in Task { @MainActor in self?.tick() } }
         if ProcessInfo.processInfo.arguments.contains("--demo-urgent") { run(.rearDoor) }
+        startHouseholdUpdates()
     }
     func setDemoMode(_ enabled: Bool) {
         cancelExplanation(); cancelDepartureVerification(); stopPolling(); closeVideo(); motion.stop()
@@ -164,6 +168,7 @@ import UserNotifications
         syncTask = Task { [weak self] in
             do {
                 try await api.sync(incident, cameraNames: names)
+                self?.mirrorAudit()
                 for delay in [1.5, 4.0, 10.0, 20.0] {
                     try await Task.sleep(for: .seconds(delay))
                     let summary = try await api.summary(incidentID: incident.id)
@@ -179,8 +184,60 @@ import UserNotifications
         return incident.decision.explanation
     }
     func transition(_ next: IncidentState) {
-        do { try current?.transition(to: next, now: Date(), safety: verdict); persist() }
+        do { try current?.transition(to: next, now: Date(), safety: verdict); persist(); mirrorAudit() }
         catch { message = "Action could not complete: \(error). Video remains protected." }
+    }
+    /// Records an explicit driver choice (with its timestamp) and starts its effect.
+    func choose(_ choice: DriverChoice, detail: String? = nil) {
+        if choice == .findStop { Task { await findStop() }; return }
+        guard var incident = current else { return }
+        do { try incident.choose(choice, now: Date(), detail: detail) }
+        catch { message = "That choice is not available right now. Listen to the explanation first."; return }
+        current = incident; persist(); mirrorAudit()
+        if choice == .dismiss { cancelExplanation(); stops = []; closeVideo(); tick() }
+    }
+    /// Sends driver-side audit entries to the backend timeline; retried on the next change if it fails.
+    func mirrorAudit() {
+        guard let incident = current, let api = household else { return }
+        let pending = incident.audit.filter { AuditPayload.mirrors($0) && !mirroredAudit.contains($0.id) }
+        guard !pending.isEmpty else { return }
+        Task { [weak self] in
+            do { try await api.recordAudit(incidentID: incident.id, entries: pending); self?.mirroredAudit.formUnion(pending.map(\.id)) } catch {}
+        }
+    }
+    /// Foreground polling for backend incidents (absence rules) while a backend is configured.
+    func startHouseholdUpdates() {
+        householdTask?.cancel()
+        householdTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.pollHousehold()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+    func pollHousehold() async {
+        guard let api = household, let items = try? await api.activeIncidents(type: IncidentKind.absence.rawValue) else { return }
+        for item in items {
+            guard let id = item.uuid else { continue }
+            if let summary = item.summary { summaries[id] = summary }
+            // The backend sets NOTIFIED when the escalation ladder reaches the driver.
+            guard item.state == IncidentState.notified.rawValue, current?.id != id, !history.contains(where: { $0.id == id }) else { continue }
+            adoptAbsence(item, id: id)
+        }
+    }
+    private func adoptAbsence(_ item: BackendIncident, id: UUID) {
+        let now = Date()
+        var incident = Incident.absence(id: id, summary: item.summary?.text ?? "An expected activity was not observed by the exit cameras.",
+                                        ruleName: item.ruleName ?? "Absence rule", simulated: item.simulated ?? false, now: now)
+        try? incident.transition(to: .triaged, now: now); try? incident.transition(to: .notified, now: now)
+        // Never interrupt a driver who is handling an active urgent camera incident; keep it in Incidents instead.
+        if let active = current, active.kind == .camera, active.status == .active, active.decision.priority == .urgent, active.state != .dismissed {
+            history.insert(incident, at: 0); persist(); return
+        }
+        cancelExplanation(); closeVideo(); stops = []
+        if let current { history.insert(current, at: 0) }
+        if incident.requestUrgentAlert(now: now) { notify(incident) }
+        current = incident; selectedTab = 0; tick()
     }
     func explain() {
         guard let incident = current, !speaking else { return }
@@ -194,7 +251,7 @@ import UserNotifications
                     if self.current?.acknowledgeExplanation(revision: revision, now: Date()) != true {
                         self.message = "The incident changed during playback. Listen to the updated explanation before continuing."
                     }
-                    self.persist()
+                    self.persist(); self.mirrorAudit()
                 }
                 if !finished { self.message = "Explanation interrupted. Tap Listen again before requesting a stop." }
             }
@@ -231,10 +288,14 @@ import UserNotifications
         departureTask?.cancel(); departureTask = nil; departureStartedAt = nil; departureChecksRemaining = 0
     }
     func findStop() async {
-        guard current?.requiresExplanation == false else { return }
-        guard current?.state == .explained || current?.state == .stopRequested || current?.state == .navigating else { return }
-        if current?.state == .explained { transition(.stopRequested) }
-        else if current?.state == .navigating { transition(.stopRequested) }
+        guard let incident = current, !incident.requiresExplanation else { return }
+        if ChoicePolicy.choiceStates.contains(incident.state) {
+            guard incident.offeredChoices.contains(.findStop) else { message = "Finding a stop is not offered for this incident."; return }
+            var updated = incident
+            do { try updated.choose(.findStop, now: Date()) } catch { message = "Listen to the explanation before requesting a stop."; return }
+            current = updated; persist(); mirrorAudit()
+        } else if incident.state == .navigating { transition(.stopRequested) }
+        else if incident.state != .stopRequested { return }
         searching = true; stops = []; defer { searching = false }
         if deniedLocation { message = "Location permission denied. Enable location in Settings or park at a place you can verify yourself."; return }
         if noStops { message = "No nearby parking or service station found. Continue safely and retry; video stays locked."; return }
@@ -310,6 +371,13 @@ import UserNotifications
             try proof.write(to: url)
         } catch { runtimeStatus = "Ring not verified"; message = error.localizedDescription }
     }
+    /// Stores the backend client key without a Ring connection (absence rules, summaries and household features).
+    func saveBackendKey(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { message = "Enter the backend client key first."; return }
+        TokenVault.save(trimmed, key: "relay-token"); startHouseholdUpdates(); syncCurrent()
+        message = household == nil ? "Check the backend URL: use HTTPS, or http://127.0.0.1 on the simulator." : "Backend key saved. Household updates are on."
+    }
     func setZone(_ device: String, _ zone: Zone) { zones[device] = zone; UserDefaults.standard.set(zones.mapValues(\.rawValue), forKey: "zones") }
     func pollRing() async {
         guard !devices.isEmpty, let account = ringAccountID else { message = "Connect the Ring backend and map its cameras first."; return }
@@ -353,7 +421,9 @@ import UserNotifications
     }
     private func notify(_ incident: Incident) {
         guard incident.decision.priority == .urgent else { return } // Passive means no audible interruption.
-        let content = UNMutableNotificationContent(); content.title = "Ring Drive · rear door activity"; content.body = "Listen to the explanation. Video stays locked while driving."
+        let content = UNMutableNotificationContent()
+        content.title = incident.kind == .absence ? "Ring Drive · expected activity not seen" : "Ring Drive · rear door activity"
+        content.body = incident.kind == .absence ? "Listen to the summary. Exit cameras recorded no qualifying activity." : "Listen to the explanation. Video stays locked while driving."
         content.sound = .default; content.categoryIdentifier = "RING_DRIVE"; content.userInfo = ["incidentID": incident.id.uuidString]
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: incident.id.uuidString, content: content, trigger: nil))
     }

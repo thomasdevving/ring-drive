@@ -6,7 +6,7 @@ const uuid = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const routes = {
   rule:new RegExp(`^/rules/${uuid}$`), runs:new RegExp(`^/rules/${uuid}/runs$`),
   evaluate:new RegExp(`^/rules/${uuid}/evaluate$`), incident:new RegExp(`^/incidents/${uuid}$`),
-  summary:new RegExp(`^/incidents/${uuid}/summary$`)
+  summary:new RegExp(`^/incidents/${uuid}/summary$`), audit:new RegExp(`^/incidents/${uuid}/audit$`)
 };
 const SIMULATED_TYPES = new Set(['motion','motion.human','motion.vehicle','motion.animal','motion.other_motion','ding']);
 
@@ -35,10 +35,21 @@ export async function handleApi(req, res, url, {store, scheduler, incidents, sim
       const result = await scheduler.evaluateDate(rule, date);
       return json(res, result.error ? 409 : 200, result.error ? {error:result.error} : {data:result.run, alreadyEvaluated:!!result.alreadyEvaluated}), true;
     }
-    if (path === '/incidents' && method === 'GET') return json(res, 200, {data:store.incidents()}), true;
+    if (path === '/incidents' && method === 'GET') {
+      // Optional filters: type=ABSENCE|INTRUSION, active=1, since=<epoch ms of createdAt>.
+      const type = url.searchParams.get('type'), active = url.searchParams.get('active') === '1', since = Number(url.searchParams.get('since') ?? 0);
+      const list = store.incidents().filter(i => (!type || i.type === type) && (!active || (i.status === 'active' && i.state !== 'DISMISSED'))
+        && Date.parse(i.createdAt) >= since);
+      return json(res, 200, {data:list.map(i => incidents.present(i))}), true;
+    }
     if (path === '/incidents' && method === 'POST') {
       const result = await incidents.upsertIntrusion(await body());
-      return json(res, result.created ? 201 : 200, {data:result.incident}), true;
+      return json(res, result.created ? 201 : 200, {data:incidents.present(result.incident)}), true;
+    }
+    if ((match = path.match(routes.audit)) && method === 'POST') {
+      const {entries} = await body();
+      const result = await incidents.recordEntries(match[1], entries);
+      return json(res, 200, {data:incidents.present(result.incident), accepted:result.accepted}), true;
     }
     if ((match = path.match(routes.summary)) && method === 'GET') {
       // Read at tap time: always answers immediately with the best stored text.
@@ -46,7 +57,7 @@ export async function handleApi(req, res, url, {store, scheduler, incidents, sim
       return json(res, 200, {data:{...incident.summary, status:incident.summaryStatus ?? 'ready'}}), true;
     }
     if ((match = path.match(routes.incident)) && method === 'GET') {
-      const incident = store.incident(match[1]); return json(res, incident ? 200 : 404, incident ? {data:incident} : {error:'Incident not found'}), true;
+      const incident = store.incident(match[1]); return json(res, incident ? 200 : 404, incident ? {data:incidents.present(incident)} : {error:'Incident not found'}), true;
     }
     if (path === '/simulate/observations' && method === 'POST') {
       // Off unless SIMULATION_ENABLED=1. Simulated evidence is stored separately and never satisfies a Ring rule.

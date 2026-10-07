@@ -1,4 +1,5 @@
 import {Summarizer, templateSummary, DEFAULT_TIME_ZONE} from './summary.mjs';
+import {applyEntries, backendTransition, availableChoices} from './state-machine.mjs';
 
 export class IncidentError extends Error { constructor(status, message) { super(message); this.status = status; } }
 
@@ -50,6 +51,27 @@ export class IncidentService {
     // A newer observation set may have arrived meanwhile; only the latest generation may write.
     await this.store.updateIncident(id, i => { if (i.summaryGeneration === generation) { i.summary = summary; i.summaryStatus = 'ready'; } });
   }
+
+  /** A new absence incident: summary in the background, then the driver is alerted. */
+  async absenceCreated(incident) {
+    this.refreshSummary(incident.id);
+    await this.store.updateIncident(incident.id, i => {
+      backendTransition(i, 'TRIAGED', 'Absence confirmed: camera history read for every exit camera', this.now());
+      backendTransition(i, 'NOTIFIED', 'Driver alerted', this.now());
+    });
+  }
+
+  /** Audit entries reported by the driver app (or Siri) in order; idempotent by entry id. */
+  async recordEntries(id, entries) {
+    const incident = this.store.incident(id);
+    if (!incident) throw new IncidentError(404, 'Incident not found');
+    const {accepted, state} = applyEntries(incident, entries, this.now());
+    if (accepted.length) await this.store.updateIncident(id, i => { i.audit = [...(i.audit ?? []), ...accepted]; i.state = state; });
+    return {incident:this.store.incident(id), accepted:accepted.length};
+  }
+
+  /** Response shape: the stored record plus the choices the driver can take now. */
+  present(incident) { return {...incident, availableChoices:availableChoices(incident)}; }
 
   async upsertIntrusion(input) {
     const fields = validateIntrusion(input), existing = this.store.incident(fields.id);

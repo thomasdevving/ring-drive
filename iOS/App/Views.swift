@@ -52,22 +52,25 @@ struct DriveView: View {
 }
 
 struct IncidentFocus: View {
+    @EnvironmentObject var model: AppModel
     let incident: Incident
-    var isUrgent: Bool { incident.status == .active && incident.decision.priority == .urgent }
+    var isUrgent: Bool { incident.status == .active && incident.decision.priority == .urgent && incident.state != .dismissed }
     var isResolved: Bool { incident.status == .resolved }
+    var isAbsence: Bool { incident.kind == .absence }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Label(isResolved ? "Observed activity ended" : (isUrgent ? "Needs your attention" : (incident.decision.priority == .passive ? "No action needed" : "Awaiting better evidence")),
+            Label(incident.state == .dismissed ? "Dismissed" : (isResolved ? "Observed activity ended" : (isUrgent ? "Needs your attention" : (incident.decision.priority == .passive ? "No action needed" : "Awaiting better evidence"))),
                   systemImage: isUrgent ? "exclamationmark.triangle.fill" : "checkmark.shield.fill")
                 .foregroundStyle(isUrgent ? .orange : (incident.decision.priority == .passive ? .green : .secondary))
                 .font(.subheadline.weight(.semibold))
-            Text(isResolved ? "Departure observed.\nIncident updated." : (isUrgent ? "Activity at your\nrear door" : (incident.decision.priority == .passive ? "Package delivered.\nVisitor has left." : "Activity detected.\nConfidence is limited.")))
+            Text(isAbsence ? "Expected activity\nnot seen" : (isResolved ? "Departure observed.\nIncident updated." : (incident.decision.priority == .urgent ? "Activity at your\nrear door" : (incident.decision.priority == .passive ? "Package delivered.\nVisitor has left." : "Activity detected.\nConfidence is limited."))))
                 .font(.largeTitle.bold()).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("incidentHeadline")
-            CameraTrace(events: Array(incident.events.suffix(3)))
+            if !incident.events.isEmpty { CameraTrace(events: Array(incident.events.suffix(3))) }
             if incident.events.count > 3 { Text("\(incident.events.count) observations in this incident · full timeline after parking").font(.caption).foregroundStyle(.secondary) }
-            Text(isUrgent ? "Side entrance activity was followed by repeated rear-door observations. Listen for the evidence." : incident.decision.explanation)
+            Text(isAbsence ? model.spokenText(for: incident) : (isUrgent ? "Side entrance activity was followed by repeated rear-door observations. Listen for the evidence." : incident.decision.explanation))
                 .font(.body).foregroundStyle(.secondary)
-            Label(incident.events.first?.source.label ?? "No evidence", systemImage: incident.events.first?.source == .synthetic ? "testtube.2" : "network")
+            Label(isAbsence ? (incident.isSimulated ? "Simulated absence rule" : "Absence rule · Ring event history") : (incident.events.first?.source.label ?? "No evidence"),
+                  systemImage: incident.isSimulated ? "testtube.2" : "network")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -103,15 +106,23 @@ struct DriverActions: View {
                 Label(model.speaking ? "Explaining…" : "Listen to explanation", systemImage: model.speaking ? "waveform" : "speaker.wave.2.fill")
                     .frame(maxWidth: .infinity, minHeight: 34)
             }.buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.black).disabled(model.speaking).accessibilityIdentifier("listen")
-            if let state = model.current?.state, model.current?.requiresExplanation == false,
-               state != .notified && state != .triaged && state != .detected {
-                if state == .explained || state == .stopRequested || state == .navigating {
+            if let incident = model.current, !incident.requiresExplanation {
+                let state = incident.state
+                // Explicit driver choices after the explanation; each one is recorded with its time.
+                if ChoicePolicy.choiceStates.contains(state) {
+                    ForEach(incident.availableChoices, id: \.self) { choice in
+                        Button { model.choose(choice) } label: {
+                            Label(choice == .findStop && model.searching ? "Finding nearby stops…" : choice.title, systemImage: choice.symbol)
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                        }.buttonStyle(.bordered).controlSize(.large).disabled(choice == .findStop && model.searching)
+                            .accessibilityIdentifier(choice == .findStop ? "findStop" : "choice-\(choice.rawValue)")
+                    }
+                }
+                if state == .stopRequested || state == .navigating {
                     Button { Task { await model.findStop() } } label: {
                         Label(model.searching ? "Finding nearby stops…" : "Find a safe place to stop", systemImage: "mappin.and.ellipse")
                             .frame(maxWidth: .infinity, minHeight: 34)
                     }.buttonStyle(.bordered).controlSize(.large).disabled(model.searching).accessibilityIdentifier("findStop")
-                }
-                if state == .stopRequested || state == .navigating {
                     Button("I'm safely parked") { model.confirmParking() }
                         .buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.black)
                         .disabled(model.verdict.state != .stationary && model.verdict.state != .parked)
@@ -174,7 +185,7 @@ struct CarPlayPreview: View {
                 VStack(alignment: .leading, spacing: 24) {
                     Label("Interactive CarPlay simulation", systemImage: "testtube.2").font(.subheadline).foregroundStyle(.orange)
                     if let incident = model.current {
-                        Text(incident.status == .resolved ? "Observed activity ended" : (incident.decision.priority == .urgent ? "Rear door activity" : "Home update")).font(.largeTitle.bold())
+                        Text(incident.kind == .absence ? "Expected activity not seen" : (incident.status == .resolved ? "Observed activity ended" : (incident.decision.priority == .urgent ? "Rear door activity" : "Home update"))).font(.largeTitle.bold())
                         Text("Listen first. Stop safely to review video.").font(.title3).foregroundStyle(.secondary)
                         DriverActions()
                         if !model.stops.isEmpty { StopResults() }
@@ -200,12 +211,14 @@ struct IncidentListView: View {
     }
     private func incidentRow(_ incident: Incident) -> some View {
         let title: String
-        if incident.status == .resolved { title = "Observed activity ended" }
+        if incident.kind == .absence { title = "Expected activity not seen" }
+        else if incident.status == .resolved { title = "Observed activity ended" }
         else if incident.decision.priority == .urgent { title = "Rear-door activity" }
         else if incident.decision.priority == .passive { title = "Package delivered" }
         else { title = "Evidence needs review" }
         let subtitle = [incident.status.rawValue.capitalized, incident.decision.priority.rawValue.capitalized,
-                        incident.events.first?.source.label ?? "Unknown"].joined(separator: " · ")
+                        incident.kind == .absence ? (incident.isSimulated ? "Simulated absence rule" : "Absence rule") : (incident.events.first?.source.label ?? "Unknown"),
+                        incident.state.rawValue.replacingOccurrences(of: "_", with: " ").capitalized].joined(separator: " · ")
         return NavigationLink { IncidentDetailView(incidentID: incident.id) } label: {
             VStack(alignment: .leading, spacing: 8) {
                 Text(title).font(.headline)
@@ -299,7 +312,8 @@ struct IncidentTimelineRow: View {
                 Text("\(assessment.evidenceKeys.count) observations · \(assessment.decision.ruleVersion)").font(.caption).foregroundStyle(.secondary)
             }.padding(.vertical, 4)
         case .transition(let entry):
-            timelineLabel(entry.state.rawValue, detail: entry.note, symbol: "arrow.right.circle", color: .secondary)
+            timelineLabel(entry.choice.map { "Driver chose: \($0.title)" } ?? entry.state.rawValue, detail: entry.note,
+                          symbol: entry.choice?.symbol ?? "arrow.right.circle", color: entry.choice == nil ? .secondary : .blue)
                 .padding(.vertical, 4)
         }
     }
@@ -382,6 +396,8 @@ struct DemoView: View {
                     SecureField("", text: $relayToken).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityLabel("Backend client key").accessibilityIdentifier("backendKey").frame(minHeight: 28)
                 }
+                Button("Save key for household features") { model.saveBackendKey(relayToken.isEmpty ? model.backendToken : relayToken); relayToken = "" }
+                    .frame(minHeight: 44).accessibilityIdentifier("saveBackendKey")
                 Button(model.loadingRing ? "Connecting…" : "Connect & discover Ring devices") {
                     let value = relayToken.isEmpty ? model.backendToken : relayToken
                     Task { await model.connectRing(clientToken: value); relayToken = "" }

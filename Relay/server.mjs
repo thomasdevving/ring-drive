@@ -17,7 +17,7 @@ export function verifySignature(key, raw, received = '') {
 }
 export function createRelay({ signingKey, clientToken, expectedAccount, ring, now = () => Date.now(), store = new Store(null, now),
   incidents = new IncidentService({store, now}),
-  scheduler = new AbsenceScheduler({store, ring, now, onIncident:incident => incidents.refreshSummary(incident.id)}), simulation = false }) {
+  scheduler = new AbsenceScheduler({store, ring, now, onIncident:incident => incidents.absenceCreated(incident)}), simulation = false }) {
   if (!clientToken) throw new Error('Configure RELAY_CLIENT_TOKEN using scripts/setup_ring.mjs.');
   const queue = [], seen = new Map(), calls = [];
   function json(res, code, body) { res.writeHead(code, {'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(body)); }
@@ -121,7 +121,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const bedrock = bedrockClientFromEnv();
   const summarizer = new Summarizer({client:bedrock, model:process.env.BEDROCK_MODEL_ID || DEFAULT_MODEL, timeoutMs:Number(process.env.BEDROCK_TIMEOUT_MS) || 15000, log});
   const incidents = new IncidentService({store:household, summarizer, log});
-  const scheduler = new AbsenceScheduler({store:household, ring:process.env.RING_ACCESS_TOKEN ? ring : null, log, onIncident:incident => incidents.refreshSummary(incident.id)});
+  const scheduler = new AbsenceScheduler({store:household, ring:process.env.RING_ACCESS_TOKEN ? ring : null, log, onIncident:incident => incidents.absenceCreated(incident)});
   const server = createRelay({signingKey:process.env.RING_HMAC_KEY, clientToken:process.env.RELAY_CLIENT_TOKEN, expectedAccount:process.env.RING_ACCOUNT_ID,ring,
     store:household, incidents, scheduler, simulation:process.env.SIMULATION_ENABLED === '1'});
   const port = Number(process.env.PORT ?? 8787);

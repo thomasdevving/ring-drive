@@ -36,6 +36,30 @@ public struct IncidentSyncPayload: Encodable, Equatable, Sendable {
     }
 }
 
+/// An incident as stored on the backend (absence incidents originate there).
+public struct BackendIncident: Decodable, Equatable, Sendable {
+    public let id: String
+    public let type: String
+    public let state: String
+    public let status: String
+    public let simulated: Bool?
+    public let ruleName: String?
+    public let summary: StoredSummary?
+    public var uuid: UUID? { UUID(uuidString: id) }
+}
+
+/// One audit entry mirrored to the backend timeline. The entry id makes retries idempotent.
+public struct AuditPayload: Encodable, Equatable, Sendable {
+    public let id: String, at: String, state: String, note: String, choice: String?, source: String
+    public init(_ entry: AuditEntry, source: String = "driver-app") {
+        id = entry.id.uuidString.lowercased(); state = entry.state.rawValue; note = entry.note; choice = entry.choice?.rawValue; self.source = source
+        let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        at = formatter.string(from: entry.at)
+    }
+    /// Driver-side states are mirrored; detection and notification are recorded by the backend itself.
+    public static func mirrors(_ entry: AuditEntry) -> Bool { ![.detected, .triaged, .notified].contains(entry.state) }
+}
+
 public enum HouseholdAPIError: LocalizedError, Equatable {
     case invalidOrigin, missingToken, http(Int), invalidPayload
     public var errorDescription: String? {
@@ -70,8 +94,22 @@ public struct HouseholdAPI: Sendable {
         guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else { throw HouseholdAPIError.invalidPayload }
         return envelope.data
     }
-    func request(_ path: String, method: String = "GET", body: Data? = nil, timeout: TimeInterval = 10) async throws -> Data {
-        var request = URLRequest(url: base.appendingPathComponent(path)); request.httpMethod = method; request.httpBody = body
+    /// Active incidents of one type that the driver app should know about (for example ABSENCE).
+    public func activeIncidents(type: String) async throws -> [BackendIncident] {
+        struct Envelope: Decodable { let data: [BackendIncident] }
+        let data = try await request("incidents", query: [URLQueryItem(name: "type", value: type), URLQueryItem(name: "active", value: "1")])
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else { throw HouseholdAPIError.invalidPayload }
+        return envelope.data
+    }
+    public func recordAudit(incidentID: UUID, entries: [AuditEntry], source: String = "driver-app") async throws {
+        struct Body: Encodable { let entries: [AuditPayload] }
+        let body = try JSONEncoder().encode(Body(entries: entries.map { AuditPayload($0, source: source) }))
+        _ = try await request("incidents/\(incidentID.uuidString.lowercased())/audit", method: "POST", body: body)
+    }
+    func request(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: Data? = nil, timeout: TimeInterval = 10) async throws -> Data {
+        var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        if !query.isEmpty { components.queryItems = query }
+        var request = URLRequest(url: components.url!); request.httpMethod = method; request.httpBody = body
         request.timeoutInterval = timeout
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

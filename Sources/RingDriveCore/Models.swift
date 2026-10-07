@@ -45,16 +45,24 @@ public enum IncidentState: String, Codable, CaseIterable, Sendable {
     case detected = "DETECTED", triaged = "TRIAGED", notified = "NOTIFIED", explained = "EXPLAINED"
     case stopRequested = "STOP_REQUESTED", navigating = "NAVIGATING"
     case parkedConfirmed = "PARKED_CONFIRMED", videoUnlocked = "VIDEO_UNLOCKED"
+    case householdNotified = "HOUSEHOLD_NOTIFIED", contactCalled = "CONTACT_CALLED", dismissed = "DISMISSED"
 }
 public struct AuditEntry: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let at: Date
     public let state: IncidentState
     public let note: String
-    public init(at: Date, state: IncidentState, note: String) { id = UUID(); self.at = at; self.state = state; self.note = note }
+    /// Set when this entry records an explicit driver choice.
+    public let choice: DriverChoice?
+    public init(at: Date, state: IncidentState, note: String, choice: DriverChoice? = nil) {
+        id = UUID(); self.at = at; self.state = state; self.note = note; self.choice = choice
+    }
 }
 public struct Incident: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
+    public let kind: IncidentKind
+    /// Absence incidents carry no camera events, so their simulation label is stored explicitly.
+    public let markedSimulated: Bool
     public private(set) var events: [CameraEvent]
     public private(set) var decision: TriageDecision
     public private(set) var state: IncidentState
@@ -66,26 +74,41 @@ public struct Incident: Codable, Equatable, Identifiable, Sendable {
     public private(set) var lastAlertAt: Date?
     public private(set) var alertRequestCount: Int
     public var requiresExplanation: Bool { explanationRevisionID != nil }
-    public init(events: [CameraEvent], decision: TriageDecision, now: Date) {
-        self.id = UUID(); self.events = events; self.decision = decision; state = .detected
-        audit = [AuditEntry(at: now, state: .detected, note: "Camera evidence received")]
+    public var isSimulated: Bool { markedSimulated || events.first?.source == .synthetic }
+    public init(id: UUID = UUID(), kind: IncidentKind = .camera, events: [CameraEvent], decision: TriageDecision, now: Date, simulated: Bool = false) {
+        self.id = id; self.kind = kind; markedSimulated = simulated; self.events = events; self.decision = decision; state = .detected
+        audit = [AuditEntry(at: now, state: .detected, note: kind == .absence ? "Absence rule fired: no qualifying observation at any exit camera" : "Camera evidence received")]
         assessments = [.init(at: now, decision: decision, evidenceKeys: events.map(\.deduplicationKey))]
         status = .active; resolvedAt = nil; explanationRevisionID = assessments[0].id
         lastAlertAt = nil; alertRequestCount = 0
     }
+    /// After EXPLAINED the driver makes explicit choices; FIND_STOP enters the existing stop → parked → video path.
+    public static let allowedTransitions: [IncidentState: Set<IncidentState>] = [
+        .detected: [.triaged], .triaged: [.notified], .notified: [.explained],
+        .explained: [.stopRequested, .householdNotified, .contactCalled, .dismissed],
+        .householdNotified: [.contactCalled, .stopRequested, .dismissed],
+        .contactCalled: [.householdNotified, .stopRequested, .dismissed],
+        .stopRequested: [.navigating, .parkedConfirmed, .dismissed],
+        .navigating: [.stopRequested, .parkedConfirmed, .dismissed], .parkedConfirmed: [.videoUnlocked], .videoUnlocked: [], .dismissed: []
+    ]
     public mutating func transition(to next: IncidentState, now: Date, safety: SafetyVerdict? = nil) throws {
-        let allowed: [IncidentState: Set<IncidentState>] = [
-            .detected: [.triaged], .triaged: [.notified], .notified: [.explained],
-            .explained: [.stopRequested], .stopRequested: [.navigating, .parkedConfirmed],
-            .navigating: [.stopRequested, .parkedConfirmed], .parkedConfirmed: [.videoUnlocked], .videoUnlocked: []
-        ]
-        guard allowed[state, default: []].contains(next) else { throw TransitionError.invalid(state, next) }
+        guard Self.allowedTransitions[state, default: []].contains(next) else { throw TransitionError.invalid(state, next) }
         if next == .parkedConfirmed || next == .videoUnlocked {
-            guard !requiresExplanation, safety?.allowsVideo == true, safety?.isFresh(at: now) == true else { throw TransitionError.unsafe }
+            guard kind == .camera, !requiresExplanation, safety?.allowsVideo == true, safety?.isFresh(at: now) == true else { throw TransitionError.unsafe }
         }
         state = next
         if next == .explained { explanationRevisionID = nil }
         audit.append(AuditEntry(at: now, state: next, note: next == .parkedConfirmed ? (safety?.reason ?? "") : "Transition accepted"))
+    }
+    /// Records an explicit driver choice with its timestamp. Only choices offered for this incident type are accepted.
+    public mutating func choose(_ choice: DriverChoice, now: Date, detail: String? = nil) throws {
+        guard !requiresExplanation else { throw TransitionError.explanationRequired }
+        guard offeredChoices.contains(choice) else { throw TransitionError.notOffered(choice) }
+        let next = choice.targetState
+        if state == next && next == .stopRequested { return }
+        guard Self.allowedTransitions[state, default: []].contains(next) else { throw TransitionError.invalid(state, next) }
+        state = next
+        audit.append(AuditEntry(at: now, state: next, note: "Driver chose \(choice.title.lowercased())" + (detail.map { ": \($0)" } ?? ""), choice: choice))
     }
     public mutating func revokeVideo(now: Date, reason: String) {
         guard state == .parkedConfirmed || state == .videoUnlocked else { return }
@@ -120,7 +143,8 @@ public struct Incident: Codable, Equatable, Identifiable, Sendable {
         if plan.change.requiresNewExplanation {
             explanationRevisionID = assessment.id
             revokeVideo(now: now, reason: "Urgency changed; hear the updated explanation")
-            if state == .explained { state = .notified }
+            // Earlier choices covered the earlier evidence; the driver hears the update and chooses again.
+            if ChoicePolicy.choiceStates.contains(state) || state == .dismissed { state = .notified }
         } else if plan.change == .resolved { explanationRevisionID = nil }
         audit.append(.init(at: now, state: state, note: plan.change.auditNote))
         return plan.change
@@ -149,11 +173,13 @@ public struct Incident: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, events, decision, state, audit, assessments, status, resolvedAt, explanationRevisionID, lastAlertAt, alertRequestCount
+        case id, kind, markedSimulated, events, decision, state, audit, assessments, status, resolvedAt, explanationRevisionID, lastAlertAt, alertRequestCount
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decodeIfPresent(IncidentKind.self, forKey: .kind) ?? .camera
+        markedSimulated = try c.decodeIfPresent(Bool.self, forKey: .markedSimulated) ?? false
         events = try c.decode([CameraEvent].self, forKey: .events)
         decision = try c.decode(TriageDecision.self, forKey: .decision)
         state = try c.decode(IncidentState.self, forKey: .state)
@@ -169,4 +195,4 @@ public struct Incident: Codable, Equatable, Identifiable, Sendable {
         alertRequestCount = try c.decodeIfPresent(Int.self, forKey: .alertRequestCount) ?? 0
     }
 }
-public enum TransitionError: Error, Equatable { case invalid(IncidentState, IncidentState), unsafe }
+public enum TransitionError: Error, Equatable { case invalid(IncidentState, IncidentState), unsafe, notOffered(DriverChoice), explanationRequired }
