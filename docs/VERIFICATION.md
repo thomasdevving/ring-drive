@@ -67,3 +67,20 @@ The six-test native run `Test-RingDrive-2026.10.06_00-24-51-+0200.xcresult` pass
 The extension's physical arm64 app/widget Release build passed again on the final UI sources, unsigned. The full CarPlay source passed SDK typechecking with `FULL_CARPLAY`, with existing MapKit deprecation warnings; this remains compilation evidence only. A fresh native finish reviewer returned **ship** at the extension's supplied evidence scope, then cleared the two accessibility/action semantics changes: `INCIDENT_EVIDENCE_REVIEW.md`. The documenter comparison and recheck are in `INCIDENT_EVIDENCE_DESIGN_CHECK.md`; incumbent design files were preserved. New timeline Dynamic Type and physical sensors remain unverified; the existing large-text capture checks the established Drive layout only. Changing Simulator text preferences during a targeted run also disrupted its control selection; accessibility settings should be fixed before launching a run.
 
 Official Ring departure detection is not implemented: resolution/reappearance are demonstrated with explicitly synthetic semantic observations. Current incidents support selected-camera media review; archived incidents expose parked metadata. Authenticated Ring runtime, real CarPlay presentation and Apple approval remain external validation steps.
+
+## Household, Bedrock, Siri and Alexa+ extension — 8 October 2026
+
+Environment: Apple Silicon Mac with Command Line Tools only (Swift 6.3.3, no Xcode), Node 22.23.1.
+
+| Check | Result |
+|---|---|
+| Backend (`Relay`, `node --test`) | 55 tests pass: absence rules and time zones, fail-closed history reading, scheduler retries, Bedrock summaries and output checks, mirrored state machine, contacts, escalation ladders, routing, dry run, HTTP API, Ring proxy, webhooks |
+| MCP server (`mcp`, `node --test`) | 9 tests pass with the official MCP client SDK: protocol 2025-11-25, tools, DNS-rebinding protection, OAuth Tier 1/Tier 2, PKCE, refresh rotation |
+| Swift core | `swift build` passes. A scratch harness importing `RingDriveCore` passes all checks for sync payloads, driver choices, absence incidents, persistence, driving decision, call links, Live Activity texts and the multi-camera scenario |
+| Swift client ↔ backend contract | The harness ran `HouseholdAPI` against a real local backend: contacts, presence, absence incidents, summary, audit mirroring, notify household, inbox, acknowledgement |
+| App Intents | `iOS/App/Intents.swift` type-checks unchanged against the AppIntents SDK (macOS) with a stub model |
+| Demo scenarios | `demo.mjs 0815 --auto` and `demo.mjs multicam --backend-only` run end to end against a real backend |
+| XCTest | New test files added (`HouseholdAPITests`, `DriverChoiceTests`, `HouseholdTests`, `ActivityTextTests`, `DemoScenarioTests`); not run: XCTest needs Xcode |
+| iOS app and widget build | Not run since 7 October: no Xcode |
+| Live Bedrock output | Not obtained: AWS returned 403 "account is being verified"; template fallback verified |
+| Siri, CarPlay, driving sensors, Alexa+ registration | Not run; see `docs/friction-log.md` |

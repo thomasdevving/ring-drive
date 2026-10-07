@@ -29,3 +29,15 @@ External validation remains: a successful authenticated Ring simulator/device ev
 Scope: preserve the existing native design. No AI snapshot analysis, new cloud infrastructure, full CarPlay approval or automatic route cancellation is included.
 
 GitHub publication — 7 October 2026: native/core/backend sources, Xcode project, synthetic media, tests, design evidence and setup documentation are published to `thomasdevving/ring-drive` on `main`. Private environment files, token storage, keys, local receipts and build caches are excluded. Current extension verification: 41 Swift tests and 10 Node tests pass; five native cases pass, while the selected-camera end-to-end native case remains open. Final physical Release compilation and compile-gated CarPlay typechecking pass. Fresh native review and documentation comparison are complete; no entitlement or authenticated Ring runtime is claimed.
+
+## Household and hands-free extension — 7-8 October 2026
+
+1. Absence rules on the backend over official Ring event history, failing closed when history cannot be read.
+2. Stored spoken summaries generated with Amazon Bedrock at incident creation, with a deterministic template and output checks.
+3. Explicit driver choices after EXPLAINED (notify household, call a contact, find a stop, dismiss), offered per incident type and persisted with timestamps.
+4. Household contacts, escalation ladders that prefer people who are not driving, a backend inbox with acknowledgements, SMS through SNS, dry run for every outgoing channel.
+5. App Intents and App Shortcuts for Siri, and Live Activity stage and outcome.
+6. One-command demo scenarios with clearly simulated seed data.
+7. A self-hosted MCP server with OAuth for Alexa+ at home.
+
+Architecture decision: the backend owns absence incidents, summaries, contacts and escalation, which must run while the phone sleeps; the phone keeps camera triage and the parking/video lock and mirrors its transitions. Remaining external steps: Xcode build and device/CarPlay/Siri verification, AWS account verification for live Bedrock output, authenticated Ring runtime, Alexa+ add-on registration.

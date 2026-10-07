@@ -1,41 +1,80 @@
 # Ring Drive
 
-A native iPhone hackathon demo: meaningful home activity → spoken explanation → nearby stop → parked confirmation → video review.
+Ring Drive turns Ring camera activity, and expected activity that did not happen, into short spoken updates for a driver. The driver hears what the cameras observed, chooses what to do (notify the household, call a contact, find a safe stop or dismiss) by tap or by Siri, and reviews video only after parking. Household members who are not driving are asked first; Alexa+ can answer "what happened while I was away?" at home.
 
 Nederlandse startinstructies: [START-HIER.md](START-HIER.md).
 
-**Current status:** the local synthetic demo is runnable without a Ring device or CarPlay entitlement. Official Ring REST calls now run server-to-server through the local Node backend; the native app never receives Ring OAuth credentials. The owner has simulator access; the token has not yet been received. **Successful authenticated Ring runtime and an event-to-driver recording remain required before submission**. No Apple CarPlay entitlement has been granted or assumed.
+**Current status.**
+- The synthetic demo runs without a Ring device or a CarPlay entitlement. Official Ring REST calls run server-to-server through the local Node backend; the app never receives Ring OAuth credentials.
+- Amazon Bedrock summaries are wired in but have not yet produced a live answer. The new AWS account was still being verified on 8 October 2026, so summaries fell back to the template. Re-run `node scripts/verify_bedrock.mjs` once verification completes.
+- Authenticated Ring runtime and an event-to-driver recording are still required before submission. No Apple CarPlay entitlement has been granted or assumed.
+- Swift changes since 7 October have been compiled and checked only as far as possible without Xcode on this Mac. See [Verification and blockers](#verification-and-blockers) and [docs/friction-log.md](docs/friction-log.md).
 
-## Quick start
+## Components
 
-Requirements: macOS, Xcode 26 with the iOS 26 simulator, Python 3 for regenerating the project, Node 22+ for the official Ring backend. No paid cloud service or third-party package is needed.
+| Path | What it is |
+|---|---|
+| `iOS/App` | SwiftUI iPhone app: Drive, Incidents, Demo & Ring and Household tabs, spoken explanations, Maps handoff, parking-gated video, driving detection, App Intents for Siri |
+| `iOS/Widgets`, `iOS/Shared` | Live Activity (lock screen, Dynamic Island, small CarPlay presentation) and a static widget |
+| `iOS/CarPlay` | Full CarPlay scene, compiled only with `FULL_CARPLAY` after Apple approval |
+| `Sources/RingDriveCore` | Portable Swift core: triage, incident state machine with driver choices, parking safety, timeline, backend clients |
+| `Relay` | Node 22 backend: Ring OAuth and REST proxy, signed webhooks, absence rules, incident store, Bedrock summaries, contacts, escalation ladders, household inbox, SNS SMS |
+| `mcp` | Self-hosted MCP server (Streamable HTTP, protocol 2025-11-25) for Alexa+ at home, with its own OAuth server |
+| `scripts` | Setup, Ring and Bedrock verification, rules and household CLIs, demo scenarios, project and media generation |
 
-1. Open `RingDrive.xcodeproj` in Xcode.
-2. Select **RingDrive → an iPhone simulator**, then Run. The app and WidgetKit extension are included.
-3. Tap **Run rear-door demo**, then **Listen to explanation**. Wait for the spoken explanation to finish.
-4. Tap **Find a safe place to stop → Simulate Maps handoff**. Dismiss the explanatory message.
-5. Tap **Simulate arrival & standstill**, wait for the real 20-second verification interval, and tap **I'm safely parked**.
-6. Tap **Review incident video**. It is an explicitly synthetic rehearsal clip. Backgrounding the app, uncertain sensors or resumed driving revoke video immediately.
+## Setup and run
 
-The Demo & Ring tab includes the passive package scenario, urgent rear-door scenario, duplicates, low confidence, stale evidence, no stop result, permission denial, Maps failure and uncertain parking. **Resume driving · revoke video** proves the lock returns.
+Requirements: macOS with **Xcode 26** (iOS 26 SDK and simulator), **Node 22+**, Python 3 (only to regenerate the Xcode project). Optional: a Ring Developer Playground token, an AWS account with Bedrock access, and an iPhone for sensors, Siri and CarPlay.
 
-### Parked incident timeline and ongoing updates
+**1. Backend (`Relay`)**
 
-**Incident timeline** is a native chronological view of camera observations, immutable assessment snapshots with escalation reasons, and audited driver actions. It resolves the latest incident by ID rather than retaining a stale view snapshot. It is available only with fresh continuous standstill and explicit parking confirmation; motion, uncertainty and backgrounding replace the entire evidence surface with its lock. The driving screen shows a short summary and at most three recent observations.
+```sh
+node scripts/setup_ring.mjs                 # creates Git-ignored Relay/.env.local (mode 600) with generated keys
+cd Relay && npm install
+node --env-file=.env.local server.mjs       # http://127.0.0.1:8787, loopback only
+```
 
-Expand an observation after parking to see camera name/module, source, timestamp, evidence score and event identifier. For the current incident, **Review this camera moment** requests its camera and timestamp through the existing guarded Ring MP4 path. Synthetic observations instead offer an explicitly illustrative bundled clip. Saved older incident timelines retain metadata; media review currently uses the current incident's authorization. No thumbnails, AI analysis or new Ring snapshot integration were added. Legacy saved incidents migrate to a clearly marked recovered assessment; unavailable historical decisions are not invented.
+Settings live in `Relay/.env.local` (template: `Relay/.env.example`):
 
-Fresh events for one household update the same incident and append assessments without repeating urgent alerts or resetting an acknowledged explanation/navigation step. Official history and webhook observations can join; synthetic and real evidence cannot. An unresolved urgent episode survives a long gap rather than silently disappearing. Separate non-urgent or resolved episodes use a 180-second grouping gap. A material escalation or reopening requires a new spoken explanation and revokes any video authorization; an old speech completion cannot acknowledge a newer revision. A route already handed to Apple Maps is not automatically changed.
+| Settings | Purpose |
+|---|---|
+| `RING_ACCESS_TOKEN` (+ optional refresh, client and HMAC settings) | Official Ring API (see below) |
+| `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `BEDROCK_MODEL_ID` | Bedrock summaries |
+| `DRY_RUN` | Which outgoing channels are recorded but not sent (default `sms`) |
+| `SIMULATION_ENABLED=1` | Allows the labeled simulation endpoint |
+| `DATA_FILE` | Household store; default `Relay/data/household.local.json`, Git-ignored |
 
-Resolution requires two distinct `departed` observations with evidence score at least 0.8, from the latest active camera/module, after the latest activity and at least 10 seconds apart. Urgent rear-door episodes additionally require rear-camera evidence. New motion/person/doorbell evidence between checks, even uncertain evidence, blocks resolution. Silence and stale evidence never prove departure. Resolution removes the prior urgent notification and updates the Live Activity silently, without unlocking video or asserting that the home is safe. Fresh activity after departure reopens the same episode; a repeated urgent alert is allowed only on reopening after a 120-second cooldown. Alert counts record requests, not guaranteed system delivery or audible playback. All Live Activity updates are silent.
+**2. iPhone app**
 
-The existing Ring motion/doorbell adapters do not manufacture departure annotations. Automatic resolution is demonstrated with labeled synthetic evidence until a future vision/review adapter supplies explicit observations; image analysis is outside this change. In **Demo & Ring → Update this synthetic incident**, exercise continuing activity, uncertain activity, duplicate delivery, two departure observations (real 10-second wait) and returning activity. Source changes, backgrounding and starting another scenario cancel the synthetic departure rehearsal.
+1. Open `RingDrive.xcodeproj` and run **RingDrive** on an iPhone simulator (or on a device with your Personal Team; see below).
+2. In **Demo & Ring**, enter the backend URL (`http://127.0.0.1:8787` on the simulator) and the `RELAY_CLIENT_TOKEN` from `.env.local`. Tap **Save key for household features**, or **Connect & discover Ring devices** when a Ring token is configured.
+3. In **Household**, choose who this iPhone belongs to. Keep **Dry-run calls** on unless you want real calls.
 
-For the actual Apple Maps flow, switch off **Offline stop-search rehearsal** in Demo & Ring. The simulator searches real MapKit parking/service-station results near a disclosed synthetic Amsterdam starting point. Choose **Navigate with Apple Maps**. Search results are candidates, not a promise of availability, safe access or permission to park. Routes are owned by Apple Maps. Arrival never unlocks video.
+To try the synthetic flow without any backend:
+1. Tap **Run rear-door demo**, then **Listen to explanation**, and wait for the spoken explanation to finish.
+2. Choose **Find a safe place to stop**, then **Simulate Maps handoff**.
+3. Tap **Simulate arrival & standstill**, wait the real 20 seconds, and tap **I'm safely parked**.
+4. Tap **Review incident video**. Backgrounding the app, uncertain sensors or resumed driving relock the video immediately.
 
-Open Apple Maps once and complete its first-use screens before recording a demo. These system onboarding screens can cover a successful navigation handoff; they are outside Ring Drive. The synthetic driver mode passes an explicit Amsterdam start point to Maps; physical-device mode uses Maps' current-location origin.
+The Demo & Ring tab also has the passive package scenario, the multi-camera scenario, duplicates, low confidence, stale evidence and fault switches.
 
-### Command-line build and tests
+**3. Amazon Bedrock**: see [Incident summaries with Amazon Bedrock](#incident-summaries-with-amazon-bedrock); check with `node scripts/verify_bedrock.mjs`.
+
+**4. Household and rules**: `node scripts/household.mjs …` and `node scripts/rules.mjs …`; see [Absence rules](#absence-rules-expected-activity) and [Household contacts](#household-contacts-and-attention-aware-routing).
+
+**5. MCP server for Alexa+**: `node scripts/setup_mcp.mjs`, then `cd mcp && npm install && node server.mjs`. See [Alexa+ at home](#alexa-at-home-ring-drive-mcp-server).
+
+**6. Tests**
+
+```sh
+cd Relay && npm test              # backend: rules, summaries, state machine, escalation, Ring proxy, webhooks
+cd mcp && npm test                # MCP protocol, tools and OAuth
+swift test                        # Swift core (needs Xcode: XCTest is not part of the Command Line Tools)
+```
+
+**7. Demo scenarios**: `npm --prefix Relay run demo:0815` and `npm --prefix Relay run demo:multicam`; see [Demo scenarios](#demo-scenarios-one-command-each).
+
+### Command-line builds
 
 ```sh
 swift test
@@ -86,7 +125,7 @@ This writes `runtime-proof.local.json` only after successful official user ident
 
 ### Signed webhook relay (optional)
 
-The native app can receive Ring events through a minimal local relay. It verifies the official `X-Signature: sha256=<hex>` HMAC-SHA256 over **original request bytes**, checks the configured account, deduplicates event IDs, acknowledges lifecycle events without forwarding credentials, bounds its queue and filters stale evidence. No AWS infrastructure is needed.
+The native app can receive Ring events through a minimal local relay. It verifies the official `X-Signature: sha256=<hex>` HMAC-SHA256 over **original request bytes**, checks the configured account, deduplicates event IDs, acknowledges lifecycle events without forwarding credentials, bounds its queue and filters stale evidence. Accepted events are also kept as positive evidence for absence rules.
 
 Configure locally:
 
@@ -98,6 +137,24 @@ node --env-file=.env.local server.mjs
 ```
 
 Connect the backend account first; unsigned, unsupported, stale or wrong-account deliveries are never promoted to incidents. Official event types are `motion_detected` and `button_press`. Configure your registered Ring app to deliver to an HTTPS tunnel's `/webhooks/ring`. Expose only that path for the webhook demo. `/events`, `/ring/*` and runtime receipts require the separate client key. Use **Fetch signed Ring events** on the same verified native connection. Real phones need an HTTPS backend accessible from the phone. Exposing a backend or registering a webhook is a separate deployment/configuration step, not performed here.
+
+## Features
+
+### Parked incident timeline and ongoing updates
+
+**Incident timeline** is a native chronological view of camera observations, immutable assessment snapshots with escalation reasons, and audited driver actions. It resolves the latest incident by ID rather than retaining a stale view snapshot. It is available only with fresh continuous standstill and explicit parking confirmation; motion, uncertainty and backgrounding replace the entire evidence surface with its lock. The driving screen shows a short summary and at most three recent observations.
+
+Expand an observation after parking to see camera name/module, source, timestamp, evidence score and event identifier. For the current incident, **Review this camera moment** requests its camera and timestamp through the existing guarded Ring MP4 path. Synthetic observations instead offer an explicitly illustrative bundled clip. Saved older incident timelines retain metadata; media review currently uses the current incident's authorization. No thumbnails, AI analysis or new Ring snapshot integration were added. Legacy saved incidents migrate to a clearly marked recovered assessment; unavailable historical decisions are not invented.
+
+Fresh events for one household update the same incident and append assessments without repeating urgent alerts or resetting an acknowledged explanation/navigation step. Official history and webhook observations can join; synthetic and real evidence cannot. An unresolved urgent episode survives a long gap rather than silently disappearing. Separate non-urgent or resolved episodes use a 180-second grouping gap. A material escalation or reopening requires a new spoken explanation and revokes any video authorization; an old speech completion cannot acknowledge a newer revision. A route already handed to Apple Maps is not automatically changed.
+
+Resolution requires two distinct `departed` observations with evidence score at least 0.8, from the latest active camera/module, after the latest activity and at least 10 seconds apart. Urgent rear-door episodes additionally require rear-camera evidence. New motion/person/doorbell evidence between checks, even uncertain evidence, blocks resolution. Silence and stale evidence never prove departure. Resolution removes the prior urgent notification and updates the Live Activity silently, without unlocking video or asserting that the home is safe. Fresh activity after departure reopens the same episode; a repeated urgent alert is allowed only on reopening after a 120-second cooldown. Alert counts record requests, not guaranteed system delivery or audible playback. All Live Activity updates are silent.
+
+The existing Ring motion/doorbell adapters do not manufacture departure annotations. Automatic resolution is demonstrated with labeled synthetic evidence until a future vision/review adapter supplies explicit observations; image analysis is outside this change. In **Demo & Ring → Update this synthetic incident**, exercise continuing activity, uncertain activity, duplicate delivery, two departure observations (real 10-second wait) and returning activity. Source changes, backgrounding and starting another scenario cancel the synthetic departure rehearsal.
+
+For the actual Apple Maps flow, switch off **Offline stop-search rehearsal** in Demo & Ring. The simulator searches real MapKit parking/service-station results near a disclosed synthetic Amsterdam starting point. Choose **Navigate with Apple Maps**. Search results are candidates, not a promise of availability, safe access or permission to park. Routes are owned by Apple Maps. Arrival never unlocks video.
+
+Open Apple Maps once and complete its first-use screens before recording a demo. These system onboarding screens can cover a successful navigation handoff; they are outside Ring Drive. The synthetic driver mode passes an explicit Amsterdam start point to Maps; physical-device mode uses Maps' current-location origin.
 
 ### Absence rules ("expected activity")
 
@@ -274,25 +331,37 @@ See [Codex MCP setup](https://developers.openai.com/learn/docs-mcp) for the supp
 
 ```mermaid
 flowchart TD
-  R[Official Ring Playground / camera] --> API[Ring REST API]
-  R --> W[Signed Ring webhook]
-  W --> Relay[Local Node relay: verify, isolate, deduplicate]
-  API --> Relay
-  Relay --> Native[Native iOS client]
+  R[Ring cameras / Playground] --> API[Ring Partner API]
+  R --> W[Signed Ring webhooks]
+  subgraph Backend [Relay: local Node backend]
+    API --> Proxy[Authenticated Ring proxy]
+    W --> Hooks[HMAC verify, dedupe, observations]
+    Rules[Absence rules + scheduler] -->|event history| API
+    Hooks --> Rules
+    Rules --> Store[(Household store: rules, incidents, contacts, inbox)]
+    Sync[POST /incidents from the app] --> Store
+    Store --> Sum[Summaries: template now, Bedrock in background]
+    Store --> Ladder[Escalation ladder + attention-aware routing]
+    Ladder --> Outbox[Outbox: app inbox, SNS SMS, dry run]
+  end
+  Sum --> Bedrock[Amazon Bedrock: Claude]
+  Outbox --> SNS[Amazon SNS]
+  Proxy --> Native[Driver iPhone app]
   Fixtures[Labeled synthetic scenarios] --> Native
-  Native --> Core[Portable Swift incident core]
-  Core --> Triage[Deterministic triage + reasons]
-  Triage --> State[Audited incident state machine]
-  State --> Voice[AVSpeechSynthesizer explanation]
-  State --> Activity[ActivityKit / small CarPlay Live Activity]
-  Voice --> Search[MapKit nearby parking and service stations]
-  Search --> Maps[Apple Maps navigation handoff]
+  Native --> Core[Swift core: triage, state machine, driver choices]
+  Core --> Voice[Spoken stored summary]
+  Core --> Activity[Live Activity incl. CarPlay small]
+  Siri[Siri / App Intents] --> Core
+  Core --> Maps[MapKit + Apple Maps]
   Sensors[CoreLocation + CoreMotion + parked confirmation] --> Guard[Fail-closed video guard]
-  State --> Guard
-  Guard --> Video[AVPlayer: parked iPhone review only]
+  Core --> Guard --> Video[AVPlayer: parked iPhone only]
+  Native <-->|sync, audit, presence, inbox| Store
+  Members[Household members' apps] <-->|presence, inbox, acknowledgements| Store
+  MCP[mcp: MCP server + OAuth] -->|HTTP API| Store
+  Alexa[Alexa+ at home] --> MCP
 ```
 
-`Sources/RingDriveCore` has no UI dependency and includes the native backend transport. `iOS/App` owns services and effect orchestration. `iOS/Shared` defines ActivityKit payloads. `iOS/Widgets` presents system surfaces. `iOS/CarPlay` is compile-gated. `Relay` owns Ring credentials, server-to-server REST/OAuth refresh and signed inbound webhooks. `scripts` contains reproducible project/media generation, credential setup, safe packaging and genuine Ring connectivity verification.
+`Sources/RingDriveCore` has no UI dependency and includes the native backend transports (`RingAPI`, `HouseholdAPI`), driver choices (`DriverChoices.swift`), household types and driving decision (`Household.swift`) and Live Activity texts (`ActivityText.swift`). `iOS/App` owns services and effect orchestration, including `DrivingMonitor` and the App Intents. The backend owns absence rules (`absence.mjs`, `scheduler.mjs`), the incident store (`store.mjs`), summaries (`summary.mjs`), the mirrored state machine (`state-machine.mjs`), contacts and escalation (`contacts.mjs`, `escalation.mjs`, `outbox.mjs`) and the HTTP API (`api.mjs`). `iOS/Shared` defines ActivityKit payloads. `iOS/Widgets` presents system surfaces. `iOS/CarPlay` is compile-gated. `Relay` owns Ring credentials, server-to-server REST/OAuth refresh and signed inbound webhooks. `scripts` contains reproducible project/media generation, credential setup, safe packaging and genuine Ring connectivity verification.
 
 `Timeline.swift` provides stable chronological item identities and the shared parked-evidence guard. `IncidentUpdates.swift` holds inspectable episode, resolution and interruption policy. `Incident` persists every assessment's original evidence references, status, required explanation revision and alert cooldown alongside its existing transition audit.
 
@@ -325,7 +394,7 @@ From `HOUSEHOLD_NOTIFIED` or `CONTACT_CALLED` the driver can still take the othe
 | Duplicate retry | Account + device + event ID deduplication | No second incident/notification |
 | Different households | Account isolation | No cross-household correlation |
 
-Confidence is an inspectable heuristic score, **not a calibrated probability**. All rules use injectable timestamps in tests. Ring metadata does not prove courier identity, package delivery/departure or that two cameras see the same person. The courier demonstration uses explicit synthetic semantic annotations. Official runtime correlation describes observations and states that identity is inferred, not verified. Vision/LLM inference is an extension point; this version does not claim to run a vision model or cloud AI.
+Confidence is an inspectable heuristic score, **not a calibrated probability**. All rules use injectable timestamps in tests. Ring metadata does not prove courier identity, package delivery/departure or that two cameras see the same person. The courier demonstration uses explicit synthetic semantic annotations. Official runtime correlation describes observations and states that identity is inferred, not verified. Triage stays deterministic; Amazon Bedrock only phrases the stored spoken summary from the same observations and is checked against them. No vision model is used.
 
 ### Parking safety policy
 
@@ -348,12 +417,19 @@ iOS does not expose a general-purpose vehicle gear/parking-brake guarantee here.
 | ActivityKit + WidgetKit extension | Real extension. Live Activity state is dynamic; the ordinary widget is an honest static reminder |
 | Interactive CarPlay preview inside the app | Simulated surface, no Apple entitlement needed |
 | Full CarPlay scene | Code behind `FULL_CARPLAY`; cannot run in a real CarPlay scene until Apple approves and provisioning is configured |
+| Absence rules | Real backend logic over official Ring event history; simulated rules and evidence are labeled and never mixed with Ring evidence |
+| Bedrock summaries | Real Bedrock integration; live output pending AWS account verification; deterministic template otherwise |
+| Household messages | Real backend inbox and acknowledgements; remote push replaced by in-app polling plus local notifications (no APNs); SMS dry-run by default |
+| Driving detection | Real CarPlay audio route and CoreMotion code; unverified on hardware; demo mode uses the labeled simulated vehicle |
+| Siri App Intents | Real App Intents; type-checked against the SDK, not yet run on a device or in CarPlay |
+| Alexa+ MCP server | Real MCP server and OAuth server, tested with the official MCP client SDK; Alexa+ add-on registration not performed |
+| Demo seed data | Contacts and rules flagged `simulated`; headless rehearsal steps recorded with source `rehearsal` |
 
 The app posts standard iPhone local notifications, not a fabricated WhatsApp-style CarPlay messaging category. Actual CarPlay delivery uses the system's Live Activity presentation. Live Activity buttons/toggles are disabled in CarPlay, and opening a full app there requires CarPlay support. We do not claim the entitlement-free MVP supplies an interactive full CarPlay app.
 
 ### Actual CarPlay simulator and entitlement steps
 
-1. Use Apple's standalone CarPlay Simulator from Additional Tools for Xcode, paired with the running iOS 26 simulator. Inspect the active Live Activity on CarPlay Home; add the small widget via the system's CarPlay widget settings if available. The separate simulator is not bundled with this project and wasn't installed in this development environment.
+1. In the iOS Simulator use **I/O → External Displays → CarPlay**, or use Apple's standalone CarPlay Simulator (Additional Tools for Xcode), which connects to a **physical iPhone** over USB. Inspect the active Live Activity on CarPlay Home and try the Siri phrases from the App Intents section. Neither was available in this development environment.
 2. Apply for the appropriate [CarPlay entitlement](https://developer.apple.com/carplay/). A security use case is not automatically eligible for a supported category; Apple's decision is required.
 3. Once approved, use an approved App ID, entitlement and provisioning profile. Set `SWIFT_ACTIVE_COMPILATION_CONDITIONS` to include `FULL_CARPLAY` for the app target and add a `CPTemplateApplicationSceneSessionRoleApplication` scene configuration with `CarPlaySceneDelegate`. Do not invent an entitlement key/category to make an unapproved target appear.
 4. Validate the supported templates and interactions on Apple's CarPlay Simulator and real hardware. The scene currently provides voice explanation and safe-stop actions; video review remains on the parked iPhone.
@@ -404,11 +480,59 @@ The script prints the stored summary, each transition as the phone reports it, a
 | 2:30–2:50 | In Demo & Ring, append activity and repeat delivery: the same incident updates, with one alert request. Start departure verification and let both observations arrive ten real seconds apart; status becomes Resolved. |
 | 2:50–2:55 | Append returning activity: the same incident reopens. Resume driving or background the app to show evidence and video immediately relock. |
 
+## APIs used and where they are called
+
+**Ring** (all calls run on the backend; the app talks only to the backend)
+
+| API | Called in | Used for |
+|---|---|---|
+| `GET /v1/users/me` | `Relay/ring-client.mjs` → `RingClient.profile()`, `refresh()` | Verified account identity; binding refreshed tokens to the same household |
+| `GET /v1/devices` | `RingClient.devices()`; native: `RingAPI.devices()` via `/ring/v1/devices` | Device discovery and the consented device allow-list |
+| `GET /v1/history/devices/{id}/events` | `RingClient.history()`; `Relay/scheduler.mjs` → `collectEvidence()`; native polling: `AppModel.pollRing()` → `RingAPI.history()` | Absence-rule evidence for every exit camera; camera incidents for triage |
+| `POST /v1/devices/{id}/media/video/download` | `RingClient.clip()`; native: `AppModel.review()` → `RingAPI.clip()` | Recorded MP4 after parking confirmation |
+| `POST https://oauth.ring.com/oauth/token` (refresh) | `RingClient.refresh()` | Backend-only token refresh, encrypted at rest |
+| Webhooks `motion_detected`, `button_press` | `Relay/server.mjs` (`/webhooks/ring`, `verifySignature`); native: `AppModel.pollRelay()` → `RingWebhook.observations` | Signed events; positive evidence for absence rules |
+
+**AWS**
+
+| API | Called in | Used for |
+|---|---|---|
+| Amazon Bedrock Runtime `InvokeModel` (Claude, via `@anthropic-ai/bedrock-sdk`) | `Relay/summary.mjs` → `Summarizer.summarize()`; `scripts/verify_bedrock.mjs` | Stored spoken incident summaries |
+| Amazon SNS `Publish` (SMS) | `Relay/outbox.mjs` → `snsSmsSenderFromEnv()`, `Outbox.deliver()` | Household SMS (dry-run by default) |
+| IAM | User or role limited to `bedrock:InvokeModel` (and `sns:Publish` for SMS) | Least privilege |
+
+**Apple**
+
+| Framework / API | Called in | Used for |
+|---|---|---|
+| AVFoundation `AVSpeechSynthesizer`, `AVAudioSession` | `iOS/App/PlatformServices.swift` → `SpokenExplanation` | Spoken summaries; completion gates `EXPLAINED` |
+| `AVAudioSession` route changes (`.carAudio`) | `PlatformServices.swift` → `DrivingMonitor` | CarPlay connected means "driving" |
+| CoreMotion `CMMotionActivityManager` | `MotionMonitor` (standstill), `DrivingMonitor` (automotive) | Parking safety and driving detection |
+| CoreLocation | `MotionMonitor` | Fresh location and speed for parking safety; stop search origin |
+| MapKit `MKLocalPointsOfInterestRequest`, `MKMapItem.openMaps` | `SafeStopSearch` | Nearby parking and service stations; Apple Maps handoff |
+| ActivityKit, WidgetKit | `LiveActivityPresenter`; `iOS/Widgets/RingDriveWidgets.swift` (`supplementalActivityFamilies([.small])`) | Live Activity with stage and household outcome, including CarPlay |
+| App Intents (`AppIntent`, `AppEntity`, `AppShortcutsProvider`, `OpenURLIntent`) | `iOS/App/Intents.swift` | Siri: explain, notify household, call a contact, find a safe stop |
+| UserNotifications | `AppModel.notify()`, `AppModel.refreshInbox()`, `AppDelegate` | Driver alerts and household messages |
+| AVKit `AVPlayerViewController` | `GuardedPlayer` in `RingDriveApp.swift` | Parked-only video review, no Picture in Picture |
+| Security (Keychain) | `TokenVault` | Backend client key |
+| `UIApplication.open(tel:)` | `AppModel.call()` | Standard call flow with system confirmation |
+| CarPlay templates | `iOS/CarPlay/CarPlaySceneDelegate.swift` (compile-gated) | Full CarPlay app after Apple approval |
+
+**Model Context Protocol**: `@modelcontextprotocol/sdk` 1.32.1 in `mcp/server.mjs` (`McpServer.registerTool`, `StreamableHTTPServerTransport`).
+
 ## Verification and blockers
 
-See `docs/VERIFICATION.md` for the executed checks and current limitations. The initial native build encountered an SDK 23B77/runtime 23B80 mapping issue. The official workaround was `xcrun simctl runtime match set iphoneos26.1 23B80 --sdkBuild 23B77`; use this only for that exact locally installed pair. Revert with `xcrun simctl runtime match set iphoneos26.1 --default` when no longer needed. A re-download was blocked by insufficient disk space; existing personal files were not removed. Only temporary files generated for this project were cleaned.
+**Automated tests.**
+- 55 backend tests (`Relay`) and 9 MCP tests (`mcp`) pass.
+- The Swift core builds with `swift build`, and its new logic passed a check harness that also ran the Swift `HouseholdAPI` live against a real local backend.
+- New XCTest files mirror those checks but need Xcode to run.
+- `iOS/App/Intents.swift` type-checks against the AppIntents SDK.
 
-## Primary sources checked 5 October 2026
+**Not yet verified** (no Xcode on this Mac): the app and widget have not been compiled since 7 October, and nothing has run on iOS, a device, CarPlay or Siri. Also unverified: live Bedrock output (AWS account verification pending) and Alexa+ add-on registration. Each item has an entry in [docs/friction-log.md](docs/friction-log.md).
+
+See `docs/VERIFICATION.md` for earlier native runs. The initial native build encountered an SDK 23B77/runtime 23B80 mapping issue; the workaround was `xcrun simctl runtime match set iphoneos26.1 23B80 --sdkBuild 23B77`. Use it only for that exact pair, and revert with `xcrun simctl runtime match set iphoneos26.1 --default`.
+
+## Primary sources
 
 - [Hackathon rules](https://amazonappdev2026.devpost.com/rules): Ring technology must actually be used and demonstrated; local fixtures alone don't establish eligibility.
 - [Official Ring Partner API](https://developer.amazon.com/docs/ring/api-documentation.html): authentication, JSON:API history, raw-body HMAC and recorded MP4 download.
@@ -417,4 +541,8 @@ See `docs/VERIFICATION.md` for the executed checks and current limitations. The 
 - [Apple: custom Live Activity views](https://developer.apple.com/documentation/activitykit/creating-custom-views-for-live-activities): supplemental presentation.
 - [Apple CarPlay](https://developer.apple.com/carplay/): entitlement approval and supported app categories.
 
-Ring Drive is an independent hackathon concept, not an official Ring or Apple product. No cloud deployment or submission was performed.
+- [Ring Partner API: Event History, webhooks, multi-camera](https://developer.amazon.com/docs/ring/api-documentation.html), checked 7 October 2026: event types, `start`/`end`, `component_ids`, no identity or direction.
+- [Alexa+ MCP toolkit authentication](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-authentication.html), checked 8 October 2026.
+- [Claude on Amazon Bedrock](https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy), checked 8 October 2026.
+
+Ring Drive is an independent hackathon concept, not an official Ring, Amazon or Apple product. No cloud deployment or submission was performed.
