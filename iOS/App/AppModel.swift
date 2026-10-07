@@ -36,11 +36,26 @@ import UserNotifications
     @Published var departureChecksRemaining = 0
     /// Backend-generated spoken summaries (Bedrock or template), fetched ahead of time.
     @Published var summaries: [UUID: StoredSummary] = [:]
+    @Published var contacts: [HouseholdContact] = []
+    /// Messages for this iPhone's household member (escalation steps, driver requests).
+    @Published var inbox: [HouseholdNotification] = []
+    /// Household messages sent for the current incident, including who has seen them.
+    @Published var incidentNotifications: [HouseholdNotification] = []
+    @Published var drivingReading = DrivingSignal.Reading(driving: false, source: "none")
+    @Published var showingCallPicker = false
+    /// The household contact this iPhone belongs to; its driving state is reported to the backend.
+    @Published var memberContactID: String? {
+        didSet { UserDefaults.standard.set(memberContactID, forKey: "member-contact-id"); reportPresence() }
+    }
+    /// Dry run for outgoing calls: record the choice and show who would be called, without opening the phone app.
+    @Published var dryRunCalls = true { didSet { UserDefaults.standard.set(dryRunCalls, forKey: "dry-run-calls") } }
     private var safety = ParkingSafety(allowsSimulation: true)
     private var ledger = EventLedger()
     private let speech = SpokenExplanation()
     private let live = LiveActivityPresenter()
     private let motion = MotionMonitor()
+    private let driving = DrivingMonitor()
+    private var announcedInbox: Set<String> = []
     private var timer: Timer?
     private var pollTask: Task<Void, Never>?
     private var departureTask: Task<Void, Never>?
@@ -87,6 +102,11 @@ import UserNotifications
         motion.onFailure = { [weak self] text in self?.message = text; self?.safety.invalidate(); self?.tick() }
         if !demoMode { motion.start() }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in Task { @MainActor in self?.tick() } }
+        memberContactID = UserDefaults.standard.string(forKey: "member-contact-id")
+        dryRunCalls = UserDefaults.standard.object(forKey: "dry-run-calls") as? Bool ?? true
+        driving.onChange = { [weak self] reading in self?.drivingReading = reading; self?.reportPresence() }
+        driving.simulatedDriving = demoMode ? !demoStationary : nil
+        driving.start()
         if ProcessInfo.processInfo.arguments.contains("--demo-urgent") { run(.rearDoor) }
         startHouseholdUpdates()
     }
@@ -110,6 +130,7 @@ import UserNotifications
                                 motionStationary: demoStationary && !uncertainParking, motionConfidence: uncertainParking ? 0.3 : 0.95, source: .simulator))
         }
         verdict = safety.verdict(now: now)
+        driving.simulatedDriving = demoMode ? !demoStationary : nil
         if !verdict.allowsVideo {
             current?.revokeVideo(now: now, reason: verdict.reason)
             if showingVideo || player != nil { closeVideo() }
@@ -137,7 +158,7 @@ import UserNotifications
         let now = Date()
         var change = IncidentChange.continued
         if replace || current == nil || current?.canJoin(accepted, now: now) != true {
-            cancelExplanation(); closeVideo(); stops = []
+            cancelExplanation(); closeVideo(); stops = []; incidentNotifications = []
             if let current { history.insert(current, at: 0) }
             let d = TriageEngine().evaluate(accepted, now: now); current = Incident(events: accepted, decision: d, now: now)
             transition(.triaged)
@@ -190,11 +211,58 @@ import UserNotifications
     /// Records an explicit driver choice (with its timestamp) and starts its effect.
     func choose(_ choice: DriverChoice, detail: String? = nil) {
         if choice == .findStop { Task { await findStop() }; return }
+        if choice == .callContact && detail == nil { showingCallPicker = true; return }
         guard var incident = current else { return }
         do { try incident.choose(choice, now: Date(), detail: detail) }
         catch { message = "That choice is not available right now. Listen to the explanation first."; return }
         current = incident; persist(); mirrorAudit()
         if choice == .dismiss { cancelExplanation(); stops = []; closeVideo(); tick() }
+        if choice == .notifyHousehold { Task { await notifyHousehold(incidentID: incident.id) } }
+    }
+    /// Messages household members who are not driving (never this iPhone's member).
+    @discardableResult func notifyHousehold(incidentID: UUID) async -> [HouseholdNotification] {
+        guard let api = household else { message = "Connect the household backend in Demo & Ring to notify others."; return [] }
+        do {
+            let sent = try await api.notifyHousehold(incidentID: incidentID, requestedBy: memberContactID)
+            let names = sent.map(\.contactName)
+            message = names.isEmpty ? "Everyone in the household appears to be driving, so no one was notified. You can call a contact instead."
+                : "Sent to \(ListFormatter.localizedString(byJoining: names))\(sent.contains { $0.status == "dry_run" } ? " (dry run)" : "")."
+            await refreshIncidentNotifications()
+            return sent
+        } catch { message = "The household could not be notified. Check the backend connection."; return [] }
+    }
+    /// CALL_CONTACT: records the choice, then hands the number to the system phone flow, which asks for confirmation.
+    func call(_ contact: HouseholdContact) {
+        showingCallPicker = false
+        guard let url = CallLink.url(for: contact.phone) else { message = "\(contact.name) has no valid phone number."; return }
+        if current?.availableChoices.contains(.callContact) == true { choose(.callContact, detail: contact.name) }
+        if dryRunCalls { message = "Dry run: Ring Drive would now open the phone app to call \(contact.name). Turn off dry run in Household to place calls."; return }
+        UIApplication.shared.open(url)
+    }
+    func acknowledge(_ notification: HouseholdNotification) async {
+        guard let api = household else { return }
+        do { try await api.acknowledge(notificationID: notification.id, contactID: memberContactID); await refreshInbox() }
+        catch { message = "Could not confirm. Check the backend connection." }
+    }
+    func reportPresence() {
+        guard let api = household, let member = memberContactID else { return }
+        let reading = drivingReading
+        Task { try? await api.reportPresence(contactID: member, reading: reading) }
+    }
+    func refreshInbox() async {
+        guard let api = household, let member = memberContactID, let items = try? await api.inbox(contactID: member) else { return }
+        inbox = items
+        // A local notification stands in for remote push (no APNs without a paid Apple Developer account).
+        for item in items where !item.isAcknowledged && !announcedInbox.contains(item.id) && item.target != "driver" {
+            announcedInbox.insert(item.id)
+            let content = UNMutableNotificationContent(); content.title = "Ring Drive · household"; content.body = item.message
+            content.sound = .default; content.userInfo = ["notificationID": item.id]
+            try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "household-\(item.id)", content: content, trigger: nil))
+        }
+    }
+    func refreshIncidentNotifications() async {
+        guard let api = household, let id = current?.id, let items = try? await api.notifications(incidentID: id) else { return }
+        if current?.id == id { incidentNotifications = items }
     }
     /// Sends driver-side audit entries to the backend timeline; retried on the next change if it fails.
     func mirrorAudit() {
@@ -216,7 +284,12 @@ import UserNotifications
         }
     }
     func pollHousehold() async {
-        guard let api = household, let items = try? await api.activeIncidents(type: IncidentKind.absence.rawValue) else { return }
+        guard let api = household else { return }
+        if let people = try? await api.contacts() { contacts = people }
+        reportPresence()
+        await refreshInbox()
+        await refreshIncidentNotifications()
+        guard let items = try? await api.activeIncidents(type: IncidentKind.absence.rawValue) else { return }
         for item in items {
             guard let id = item.uuid else { continue }
             if let summary = item.summary { summaries[id] = summary }
@@ -234,7 +307,7 @@ import UserNotifications
         if let active = current, active.kind == .camera, active.status == .active, active.decision.priority == .urgent, active.state != .dismissed {
             history.insert(incident, at: 0); persist(); return
         }
-        cancelExplanation(); closeVideo(); stops = []
+        cancelExplanation(); closeVideo(); stops = []; incidentNotifications = []
         if let current { history.insert(current, at: 0) }
         if incident.requestUrgentAlert(now: now) { notify(incident) }
         current = incident; selectedTab = 0; tick()

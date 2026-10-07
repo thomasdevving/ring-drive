@@ -17,6 +17,7 @@ struct DriveView: View {
                 if let incident = model.current {
                     IncidentFocus(incident: incident)
                     DriverActions()
+                    HouseholdOutcome()
                     if !model.stops.isEmpty { StopResults() }
                     SafetyStatus()
                     if incident.state == .navigating {

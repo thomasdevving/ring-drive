@@ -7,8 +7,10 @@ import { AbsenceScheduler } from './scheduler.mjs';
 import { handleApi } from './api.mjs';
 import { IncidentService } from './incidents.mjs';
 import { Summarizer, bedrockClientFromEnv, DEFAULT_MODEL } from './summary.mjs';
+import { Escalation } from './escalation.mjs';
+import { Outbox, dryRunChannels, snsSmsSenderFromEnv } from './outbox.mjs';
 
-const API_PREFIXES = ['/rules', '/incidents', '/simulate'];
+const API_PREFIXES = ['/rules', '/incidents', '/simulate', '/contacts', '/members', '/notifications'];
 
 export function verifySignature(key, raw, received = '') {
   const hex = received.replace(/^sha256=/, '');
@@ -16,7 +18,7 @@ export function verifySignature(key, raw, received = '') {
   return timingSafeEqual(createHmac('sha256', key).update(raw).digest(), Buffer.from(hex, 'hex'));
 }
 export function createRelay({ signingKey, clientToken, expectedAccount, ring, now = () => Date.now(), store = new Store(null, now),
-  incidents = new IncidentService({store, now}),
+  escalation = new Escalation({store, now}), incidents = new IncidentService({store, escalation, now}),
   scheduler = new AbsenceScheduler({store, ring, now, onIncident:incident => incidents.absenceCreated(incident)}), simulation = false }) {
   if (!clientToken) throw new Error('Configure RELAY_CLIENT_TOKEN using scripts/setup_ring.mjs.');
   const queue = [], seen = new Map(), calls = [];
@@ -80,7 +82,7 @@ export function createRelay({ signingKey, clientToken, expectedAccount, ring, no
     if (API_PREFIXES.some(prefix => path === prefix || path.startsWith(prefix + '/'))) {
       if (!authorised(req)) return json(res, 401, {error:'Client token required'});
       try {
-        if (await handleApi(req, res, new URL(req.url, 'http://localhost'), {store, scheduler, incidents, simulation, now, json, readBody})) return;
+        if (await handleApi(req, res, new URL(req.url, 'http://localhost'), {store, scheduler, incidents, escalation, simulation, now, json, readBody})) return;
       } catch (error) { return json(res, error instanceof RingError ? error.status : 500, {error:'Request failed'}); }
       return json(res, 404, {error:'Not found'});
     }
@@ -120,13 +122,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const log = message => console.log(message);
   const bedrock = bedrockClientFromEnv();
   const summarizer = new Summarizer({client:bedrock, model:process.env.BEDROCK_MODEL_ID || DEFAULT_MODEL, timeoutMs:Number(process.env.BEDROCK_TIMEOUT_MS) || 15000, log});
-  const incidents = new IncidentService({store:household, summarizer, log});
+  const dryRun = dryRunChannels();
+  const escalation = new Escalation({store:household, outbox:new Outbox({dryRun, sendSms:snsSmsSenderFromEnv(), log}), log});
+  const incidents = new IncidentService({store:household, summarizer, escalation, log});
   const scheduler = new AbsenceScheduler({store:household, ring:process.env.RING_ACCESS_TOKEN ? ring : null, log, onIncident:incident => incidents.absenceCreated(incident)});
   const server = createRelay({signingKey:process.env.RING_HMAC_KEY, clientToken:process.env.RELAY_CLIENT_TOKEN, expectedAccount:process.env.RING_ACCOUNT_ID,ring,
-    store:household, incidents, scheduler, simulation:process.env.SIMULATION_ENABLED === '1'});
+    store:household, incidents, escalation, scheduler, simulation:process.env.SIMULATION_ENABLED === '1'});
   const port = Number(process.env.PORT ?? 8787);
   server.listen(port, '127.0.0.1', () => {
-    scheduler.start();
-    console.log(`Ring Drive backend on http://127.0.0.1:${port}; Ring credentials stay on this backend. Absence rules: ${household.rules().length}. Summaries: ${bedrock ? `Bedrock ${summarizer.model}` : 'template only'}.`);
+    scheduler.start(); escalation.start();
+    console.log(`Ring Drive backend on http://127.0.0.1:${port}; Ring credentials stay on this backend. Absence rules: ${household.rules().length}. Summaries: ${bedrock ? `Bedrock ${summarizer.model}` : 'template only'}. Dry-run channels: ${[...dryRun].join(', ') || 'none'}.`);
   });
 }

@@ -2,6 +2,8 @@
 // Ring provides no identity or direction, so the person label is used for wording and routing only;
 // any qualifying observation at any exit camera satisfies the rule.
 
+import {validateLadder} from './contacts.mjs';
+
 export const DAYS = ['sun','mon','tue','wed','thu','fri','sat'];
 // Documented Ring history filters that a rule may expect. A doorbell press is never an exit.
 export const EXPECTED_TYPES = ['motion.human','motion'];
@@ -38,10 +40,12 @@ export function validateRule(input) {
   if (!Number.isInteger(graceSeconds) || graceSeconds < min || graceSeconds > max) throw new RuleError(`graceSeconds must be an integer from ${min} to ${max}.`);
   const evidenceSource = input.evidenceSource ?? 'ring';
   if (!['ring','simulated'].includes(evidenceSource)) throw new RuleError('evidenceSource must be ring or simulated.');
+  let escalation;
+  try { escalation = validateLadder(input.escalation); } catch (error) { throw new RuleError(error.message); }
   return {
     name:text(input.name,60,'name'), personLabel:text(input.personLabel,40,'personLabel'),
     daysOfWeek:DAYS.filter(d => days.includes(d)), window:{start,end}, timeZone:input.timeZone,
-    exitCameras, expectedEventType, graceSeconds, evidenceSource, enabled:input.enabled !== false
+    exitCameras, expectedEventType, graceSeconds, evidenceSource, enabled:input.enabled !== false, ...(escalation ? {escalation} : {})
   };
 }
 

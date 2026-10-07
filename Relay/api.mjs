@@ -1,12 +1,16 @@
 import {randomUUID} from 'node:crypto';
 import {validateRule, RuleError, localDateOf} from './absence.mjs';
 import {IncidentError} from './incidents.mjs';
+import {validateContact, ContactError, drivingState} from './contacts.mjs';
 
 const uuid = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const routes = {
   rule:new RegExp(`^/rules/${uuid}$`), runs:new RegExp(`^/rules/${uuid}/runs$`),
   evaluate:new RegExp(`^/rules/${uuid}/evaluate$`), incident:new RegExp(`^/incidents/${uuid}$`),
-  summary:new RegExp(`^/incidents/${uuid}/summary$`), audit:new RegExp(`^/incidents/${uuid}/audit$`)
+  summary:new RegExp(`^/incidents/${uuid}/summary$`), audit:new RegExp(`^/incidents/${uuid}/audit$`),
+  notifyHousehold:new RegExp(`^/incidents/${uuid}/notify-household$`), incidentNotifications:new RegExp(`^/incidents/${uuid}/notifications$`),
+  contact:new RegExp(`^/contacts/${uuid}$`), status:new RegExp(`^/members/${uuid}/status$`), inbox:new RegExp(`^/members/${uuid}/inbox$`),
+  ack:new RegExp(`^/notifications/${uuid}/ack$`)
 };
 const SIMULATED_TYPES = new Set(['motion','motion.human','motion.vehicle','motion.animal','motion.other_motion','ding']);
 
@@ -14,7 +18,7 @@ const SIMULATED_TYPES = new Set(['motion','motion.human','motion.vehicle','motio
  * Household API used by the native app and scripts. The caller has already checked the client token.
  * Returns false when the path is not an API route.
  */
-export async function handleApi(req, res, url, {store, scheduler, incidents, simulation, now, json, readBody}) {
+export async function handleApi(req, res, url, {store, scheduler, incidents, escalation, simulation, now, json, readBody}) {
   const path = url.pathname, method = req.method;
   const body = async () => { const raw = await readBody(req); return raw.length ? JSON.parse(raw) : {}; };
   let match;
@@ -59,6 +63,36 @@ export async function handleApi(req, res, url, {store, scheduler, incidents, sim
     if ((match = path.match(routes.incident)) && method === 'GET') {
       const incident = store.incident(match[1]); return json(res, incident ? 200 : 404, incident ? {data:incidents.present(incident)} : {error:'Incident not found'}), true;
     }
+    const presentContact = c => ({...c, drivingState:drivingState(c, now())});
+    if (path === '/contacts' && method === 'GET') return json(res, 200, {data:store.contacts().map(presentContact)}), true;
+    if (path === '/contacts' && method === 'POST') return json(res, 201, {data:await store.createContact(validateContact(await body()))}), true;
+    if ((match = path.match(routes.contact))) {
+      if (method === 'GET') { const c = store.contact(match[1]); return json(res, c ? 200 : 404, c ? {data:presentContact(c)} : {error:'Contact not found'}), true; }
+      if (method === 'PUT') { const c = await store.replaceContact(match[1], validateContact(await body())); return json(res, c ? 200 : 404, c ? {data:c} : {error:'Contact not found'}), true; }
+      if (method === 'DELETE') { const removed = await store.deleteContact(match[1]); res.writeHead(removed ? 204 : 404).end(); return true; }
+    }
+    if ((match = path.match(routes.status)) && method === 'POST') {
+      const {driving, source = 'none'} = await body();
+      if (typeof driving !== 'boolean' || !['carplay','motion','simulated','none'].includes(source)) return json(res, 400, {error:'Need driving (boolean) and source carplay|motion|simulated|none'}), true;
+      const contact = await store.setPresence(match[1], {driving, source});
+      return json(res, contact ? 200 : 404, contact ? {data:presentContact(contact)} : {error:'Contact not found'}), true;
+    }
+    if ((match = path.match(routes.inbox)) && method === 'GET') {
+      if (!store.contact(match[1])) return json(res, 404, {error:'Contact not found'}), true;
+      return json(res, 200, {data:escalation.inbox(match[1])}), true;
+    }
+    if ((match = path.match(routes.ack)) && method === 'POST') {
+      const result = await escalation.acknowledge(match[1], await body());
+      return json(res, 200, {data:result.notification, alreadyAcknowledged:!!result.alreadyAcknowledged}), true;
+    }
+    if ((match = path.match(routes.notifyHousehold)) && method === 'POST') {
+      const {requestedBy} = await body();
+      const sent = await escalation.notifyHousehold(match[1], {requestedBy});
+      return json(res, 200, {data:sent}), true;
+    }
+    if ((match = path.match(routes.incidentNotifications)) && method === 'GET') {
+      return json(res, 200, {data:store.notifications().filter(n => n.incidentId === match[1])}), true;
+    }
     if (path === '/simulate/observations' && method === 'POST') {
       // Off unless SIMULATION_ENABLED=1. Simulated evidence is stored separately and never satisfies a Ring rule.
       if (!simulation) return json(res, 403, {error:'Simulation is disabled on this backend'}), true;
@@ -74,6 +108,7 @@ export async function handleApi(req, res, url, {store, scheduler, incidents, sim
   } catch (error) {
     if (error instanceof RuleError) return json(res, 400, {error:error.message}), true;
     if (error instanceof IncidentError) return json(res, error.status, {error:error.message}), true;
+    if (error instanceof ContactError) return json(res, 400, {error:error.message}), true;
     if (error instanceof SyntaxError) return json(res, 400, {error:'Malformed JSON'}), true;
     throw error;
   }

@@ -172,6 +172,41 @@ Check the live integration without printing credentials:
 node scripts/verify_bedrock.mjs
 ```
 
+### Household contacts and attention-aware routing
+
+**Contacts** (`/contacts`, `scripts/household.mjs`): `name`, `role` (`household`, `monitored`, `emergency`, `neighbour`), `priority` (1 = first) and `channel`: `app` (the member's Ring Drive inbox), `sms` (Amazon SNS) or `call` (only ever started by the driver). Each household member's iPhone selects who it belongs to in the **Household** tab.
+
+**Driving detection** (`DrivingMonitor` in `iOS/App/PlatformServices.swift`, decision in `DrivingSignal`): a CarPlay audio route (`AVAudioSession` output port `.carAudio`, observed through route-change notifications) or CoreMotion automotive activity at medium or high confidence means "driving". Each app reports this to `POST /members/{id}/status`; reports expire after 10 minutes. Demo mode uses the labeled simulated vehicle instead. Neither sensor path could be exercised in this environment; see the friction log.
+
+**Escalation ladder per absence rule** (`escalation` on the rule; default below). Example for the 08:15 rule:
+
+```json
+"escalation": [
+  { "target": "monitored", "message": "School starts in 15 minutes" },
+  { "target": "household", "afterSeconds": 300 },
+  { "target": "driver",    "afterSeconds": 300 }
+]
+```
+
+1. The monitored person gets the reminder and can answer **I'm on my way**.
+2. If nobody acknowledges within the delay, household members who are **not driving** are messaged (members with unknown state only if nobody is known to be free; members known to be driving never get a household step).
+3. Only then is the driver alerted: the incident moves to `NOTIFIED`, the driver app adopts it, speaks the stored summary and shows the Live Activity.
+
+Any acknowledgement stops the ladder before the driver is interrupted and is recorded on the incident timeline ("Sanne has seen this", "Sanne replied: on my way"). Steps with nobody to reach are skipped immediately. The driver's **Notify household** choice calls `POST /incidents/{id}/notify-household`, which messages household members who are not driving and never the requesting member; the driver hears who was reached, or that everyone appears to be driving.
+
+**Delivery and dry run** (`Relay/outbox.mjs`). `DRY_RUN` lists channels that are recorded on the timeline but not delivered (`all`, `none`, or `app,sms`; default `sms`). Remote push needs APNs, which requires a paid Apple Developer Program membership, so household messages reach the other members' apps through a backend inbox (`GET /members/{id}/inbox`), polled while the app is open and shown as a local notification. SMS uses Amazon SNS `Publish` when enabled and permitted (`sns:Publish`).
+
+**Calls.** **Call a contact** lists contacts with a valid E.164 number (emergency contacts and neighbours first) and opens a standard `tel:` link, for which iOS always asks the user to confirm. No workaround is used. **Dry-run calls** (Household tab, on by default) records the choice and shows who would be called without opening the phone app.
+
+```sh
+node scripts/household.mjs add-contact Sanne monitored
+node scripts/household.mjs add-contact Thomas household
+node scripts/household.mjs add-contact Oma emergency call +31600000000
+node scripts/household.mjs contacts
+node scripts/household.mjs driving <contact-id> yes      # simulated presence for demos
+node scripts/household.mjs notifications <incident-id>
+```
+
 ### Registered-app linking and documentation MCP
 
 For remote token delivery, `node scripts/create_token_input.mjs` creates a standalone `../Ring-token-invoer.html` containing only this workspace's public key. Download and open it locally in a current browser, paste the access token there and send only the `RINGDRIVE-TOKEN-BOX:` encrypted envelope back. The page uses WebCrypto RSA-OAEP SHA-256 to wrap a new AES-256-GCM key for each message; it has no imports, storage or network calls and a restrictive CSP. Its private key remains in ignored `Relay/.secrets/` with private permissions. `scripts/import_ring_token.mjs` imports an envelope from `Relay/.secrets/incoming.local.txt` without printing plaintext. This is a local demo handoff utility, not a deployed identity service. File-preview viewers may disable JavaScript; use a real browser on a computer when needed.

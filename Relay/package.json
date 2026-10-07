@@ -1,1 +1,1 @@
-{"name":"ring-drive-relay","private":true,"version":"0.1.0","type":"module","scripts":{"start":"node server.mjs","test":"node --test"},"engines":{"node":">=22"},"dependencies":{"@anthropic-ai/bedrock-sdk":"^0.34.3"}}
+{"name":"ring-drive-relay","private":true,"version":"0.1.0","type":"module","scripts":{"start":"node server.mjs","test":"node --test"},"engines":{"node":">=22"},"dependencies":{"@anthropic-ai/bedrock-sdk":"^0.34.3","@aws-sdk/client-sns":"^3.1147.0"}}

@@ -46,6 +46,41 @@ import RingDriveCore
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { onFailure?("Location unavailable. Video remains locked. Try again outdoors.") }
 }
 
+/// Whether this iPhone's owner is driving: a CarPlay audio route, or CoreMotion automotive activity at medium or
+/// high confidence. Reported to the backend so household messages go to someone who is not driving.
+@MainActor final class DrivingMonitor {
+    private let activityManager = CMMotionActivityManager()
+    private var automotive = false
+    private var confidence = 0.0
+    private var routeObserver: NSObjectProtocol?
+    private(set) var reading = DrivingSignal.Reading(driving: false, source: "none")
+    var onChange: ((DrivingSignal.Reading) -> Void)?
+    /// Demo mode only: the labeled simulated vehicle replaces sensor evidence.
+    var simulatedDriving: Bool? { didSet { if oldValue != simulatedDriving { evaluate() } } }
+    func start() {
+        routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.evaluate() }
+        }
+        if CMMotionActivityManager.isActivityAvailable() {
+            activityManager.startActivityUpdates(to: .main) { [weak self] activity in
+                Task { @MainActor in
+                    guard let self, let activity else { return }
+                    self.automotive = activity.automotive
+                    self.confidence = activity.confidence == .high ? 0.95 : (activity.confidence == .medium ? 0.6 : 0.3)
+                    self.evaluate()
+                }
+            }
+        }
+        evaluate()
+    }
+    /// CarPlay (wired or wireless) appears as a car audio output port.
+    static var carPlayAudio: Bool { AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .carAudio } }
+    func evaluate() {
+        let next = DrivingSignal.evaluate(carPlayAudio: Self.carPlayAudio, automotive: automotive, automotiveConfidence: confidence, simulatedDriving: simulatedDriving)
+        if next != reading { reading = next; onChange?(next) }
+    }
+}
+
 @MainActor final class SpokenExplanation: NSObject, AVSpeechSynthesizerDelegate {
     private let synth = AVSpeechSynthesizer()
     private var completion: ((Bool) -> Void)?

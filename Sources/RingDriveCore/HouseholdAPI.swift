@@ -60,6 +60,8 @@ public struct AuditPayload: Encodable, Equatable, Sendable {
     public static func mirrors(_ entry: AuditEntry) -> Bool { ![.detected, .triaged, .notified].contains(entry.state) }
 }
 
+struct ListEnvelope<T: Decodable>: Decodable { let data: [T] }
+
 public enum HouseholdAPIError: LocalizedError, Equatable {
     case invalidOrigin, missingToken, http(Int), invalidPayload
     public var errorDescription: String? {
@@ -105,6 +107,33 @@ public struct HouseholdAPI: Sendable {
         struct Body: Encodable { let entries: [AuditPayload] }
         let body = try JSONEncoder().encode(Body(entries: entries.map { AuditPayload($0, source: source) }))
         _ = try await request("incidents/\(incidentID.uuidString.lowercased())/audit", method: "POST", body: body)
+    }
+    public func contacts() async throws -> [HouseholdContact] { try await decodeList("contacts") }
+    public func inbox(contactID: String) async throws -> [HouseholdNotification] { try await decodeList("members/\(contactID)/inbox") }
+    public func notifications(incidentID: UUID) async throws -> [HouseholdNotification] {
+        try await decodeList("incidents/\(incidentID.uuidString.lowercased())/notifications")
+    }
+    /// Reports whether this member is driving, so the backend routes household messages to someone who is not.
+    public func reportPresence(contactID: String, reading: DrivingSignal.Reading) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["driving": reading.driving, "source": reading.source])
+        _ = try await request("members/\(contactID)/status", method: "POST", body: body)
+    }
+    public func acknowledge(notificationID: String, contactID: String?) async throws {
+        let body = try JSONSerialization.data(withJSONObject: contactID.map { ["contactId": $0] } ?? [:])
+        _ = try await request("notifications/\(notificationID)/ack", method: "POST", body: body)
+    }
+    /// The driver's NOTIFY_HOUSEHOLD choice. Returns who was messaged (empty when everyone appears to be driving).
+    public func notifyHousehold(incidentID: UUID, requestedBy contactID: String?) async throws -> [HouseholdNotification] {
+        struct Envelope: Decodable { let data: [HouseholdNotification] }
+        let body = try JSONSerialization.data(withJSONObject: contactID.map { ["requestedBy": $0] } ?? [:])
+        let data = try await request("incidents/\(incidentID.uuidString.lowercased())/notify-household", method: "POST", body: body)
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else { throw HouseholdAPIError.invalidPayload }
+        return envelope.data
+    }
+    private func decodeList<T: Decodable>(_ path: String) async throws -> [T] {
+        let data = try await request(path)
+        guard let envelope = try? JSONDecoder().decode(ListEnvelope<T>.self, from: data) else { throw HouseholdAPIError.invalidPayload }
+        return envelope.data
     }
     func request(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: Data? = nil, timeout: TimeInterval = 10) async throws -> Data {
         var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!

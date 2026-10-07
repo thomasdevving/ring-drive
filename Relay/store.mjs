@@ -3,7 +3,7 @@ import {readFile, writeFile, rename, mkdir} from 'node:fs/promises';
 import {dirname} from 'node:path';
 
 const OBSERVATION_RETENTION_MS = 24 * 3600000;
-const LIMITS = {rules:200, incidents:500, runs:2000, observations:5000};
+const LIMITS = {rules:200, incidents:500, runs:2000, observations:5000, contacts:50, notifications:2000};
 
 /**
  * Single-household JSON store for rules, rule runs, backend incidents and recent observations.
@@ -19,7 +19,7 @@ export class Store {
     }
     return store;
   }
-  constructor(path, now = () => Date.now()) { this.path = path; this.now = now; this.data = {rules:[], runs:[], incidents:[], observations:[]}; this.writing = Promise.resolve(); }
+  constructor(path, now = () => Date.now()) { this.path = path; this.now = now; this.data = {rules:[], runs:[], incidents:[], observations:[], contacts:[], notifications:[]}; this.writing = Promise.resolve(); }
   async save() {
     if (!this.path) return;
     const snapshot = JSON.stringify(this.data, null, 1);
@@ -72,6 +72,38 @@ export class Store {
     const incident = this.incident(id); if (!incident) return null;
     mutate(incident); incident.updatedAt = new Date(this.now()).toISOString();
     await this.save(); return incident;
+  }
+
+  contacts() { return this.data.contacts; }
+  contact(id) { return this.data.contacts.find(c => c.id === id) ?? null; }
+  async createContact(fields) {
+    const contact = {id:randomUUID(), ...fields, createdAt:new Date(this.now()).toISOString()};
+    this.data.contacts.push(contact); this.#cap('contacts'); await this.save(); return contact;
+  }
+  async replaceContact(id, fields) {
+    const contact = this.contact(id); if (!contact) return null;
+    Object.assign(contact, fields); for (const key of ['phone']) if (!(key in fields)) delete contact[key];
+    await this.save(); return contact;
+  }
+  async deleteContact(id) {
+    const before = this.data.contacts.length; this.data.contacts = this.data.contacts.filter(c => c.id !== id);
+    if (before === this.data.contacts.length) return false; await this.save(); return true;
+  }
+  /** Whether a member's own app reports that they are driving (CarPlay audio route or automotive motion). */
+  async setPresence(id, presence) {
+    const contact = this.contact(id); if (!contact) return null;
+    contact.presence = {...presence, at:new Date(this.now()).toISOString()}; await this.save(); return contact;
+  }
+
+  notifications() { return this.data.notifications; }
+  notification(id) { return this.data.notifications.find(n => n.id === id) ?? null; }
+  async addNotification(fields) {
+    const notification = {id:randomUUID(), createdAt:new Date(this.now()).toISOString(), ...fields};
+    this.data.notifications.push(notification); this.#cap('notifications'); await this.save(); return notification;
+  }
+  async updateNotification(id, mutate) {
+    const notification = this.notification(id); if (!notification) return null;
+    mutate(notification); await this.save(); return notification;
   }
 
   /** Observations from signed webhooks or the simulation endpoint, kept 24 h for absence rules. */

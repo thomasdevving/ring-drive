@@ -28,8 +28,8 @@ export function validateIntrusion(input) {
 }
 
 export class IncidentService {
-  constructor({store, summarizer = new Summarizer(), now = () => Date.now(), log = () => {}}) {
-    Object.assign(this, {store, summarizer, now, log}); this.pending = new Set();
+  constructor({store, summarizer = new Summarizer(), escalation = null, now = () => Date.now(), log = () => {}}) {
+    Object.assign(this, {store, summarizer, escalation, now, log}); this.pending = new Set();
   }
   /** Resolves when all background summary generations have finished (tests, shutdown). */
   async idle() { while (this.pending.size) await Promise.allSettled([...this.pending]); }
@@ -52,13 +52,12 @@ export class IncidentService {
     await this.store.updateIncident(id, i => { if (i.summaryGeneration === generation) { i.summary = summary; i.summaryStatus = 'ready'; } });
   }
 
-  /** A new absence incident: summary in the background, then the driver is alerted. */
+  /** A new absence incident: summary in the background, then the escalation ladder decides who hears about it. */
   async absenceCreated(incident) {
     this.refreshSummary(incident.id);
-    await this.store.updateIncident(incident.id, i => {
-      backendTransition(i, 'TRIAGED', 'Absence confirmed: camera history read for every exit camera', this.now());
-      backendTransition(i, 'NOTIFIED', 'Driver alerted', this.now());
-    });
+    await this.store.updateIncident(incident.id, i => backendTransition(i, 'TRIAGED', 'Absence confirmed: camera history read for every exit camera', this.now()));
+    if (this.escalation) return this.escalation.begin(incident.id, this.store.rule(incident.ruleId)?.escalation);
+    await this.store.updateIncident(incident.id, i => backendTransition(i, 'NOTIFIED', 'Driver alerted', this.now()));
   }
 
   /** Audit entries reported by the driver app (or Siri) in order; idempotent by entry id. */

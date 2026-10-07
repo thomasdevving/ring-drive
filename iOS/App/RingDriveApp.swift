@@ -11,8 +11,11 @@ import RingDriveCore
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let incidentID = response.notification.request.content.userInfo["incidentID"] as? String
+        let householdMessage = response.notification.request.content.userInfo["notificationID"] != nil
         await MainActor.run {
-            let model = AppModel.shared; model.selectedTab = 0
+            let model = AppModel.shared
+            if householdMessage { model.selectedTab = 3; return }
+            model.selectedTab = 0
             if model.current?.id.uuidString == incidentID { model.explain() }
             else { model.message = "This alert is no longer current. Open Incidents to inspect its history after parking." }
         }
@@ -53,7 +56,9 @@ struct RootView: View {
             NavigationStack { DriveView() }.tabItem { Label("Drive", systemImage: "car.side") }.tag(0)
             NavigationStack { IncidentListView() }.tabItem { Label("Incidents", systemImage: "clock.arrow.circlepath") }.tag(1)
             NavigationStack { DemoView() }.tabItem { Label("Demo & Ring", systemImage: "slider.horizontal.3") }.tag(2)
+            NavigationStack { HouseholdView() }.tabItem { Label("Household", systemImage: "person.2.fill") }.tag(3)
         }
+        .sheet(isPresented: $model.showingCallPicker) { CallPickerView().environmentObject(model) }
         .tint(.blue)
         .preferredColorScheme(model.selectedTab == 0 ? .dark : nil)
         .alert("Ring Drive", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {

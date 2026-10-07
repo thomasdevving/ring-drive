@@ -92,3 +92,32 @@ Severity: **blocker** (cannot proceed without a workaround), **high** (feature d
 - **Severity:** high (blocks live verification of Phase 2 for a few hours)
 - **Workaround:** Summaries fall back to the deterministic template; Bedrock is tested with an injected client and verified live with `node scripts/verify_bedrock.mjs` once the account is verified.
 - **Suggestion:** Show the verification state on the Bedrock console landing page and in the error code (not only in the message), so tooling can distinguish it from IAM denials.
+
+## 2026-10-08 · Apple · Remote push to household members needs APNs (paid program)
+
+- **Task attempted:** Push escalation messages to other household members' Ring Drive apps via Amazon SNS mobile push.
+- **Steps taken:** Checked SNS platform applications for iOS and Apple's requirements.
+- **Expected:** A development push path usable with a free Apple account.
+- **Actual:** SNS mobile push (and ActivityKit push updates) require an APNs key or certificate, which needs Apple Developer Program membership. The owner has a free Personal Team only.
+- **Severity:** high
+- **Workaround:** The backend stores messages in a per-member inbox (`GET /members/{id}/inbox`); the app polls while open and raises a local notification. Acknowledgements ("Sanne has seen this") work end to end. SMS through Amazon SNS is available as a separate channel (dry-run by default).
+- **Suggestion:** A sandbox APNs entitlement for free Personal Team builds, limited to the developer's own devices.
+
+## 2026-10-08 · Apple · Driving detection cannot be verified without hardware
+
+- **Task attempted:** Detect whether a household member is driving (CarPlay audio route via `AVAudioSession`, CoreMotion automotive activity).
+- **Steps taken:** Implemented `DrivingMonitor` (route-change observer for `.carAudio` outputs, `CMMotionActivityManager` automotive at medium/high confidence).
+- **Expected:** A way to exercise both signals in the iOS Simulator.
+- **Actual:** The iOS Simulator provides no motion activity, and the CarPlay audio route only exists with a CarPlay head unit or Apple's CarPlay Simulator, which pairs with a physical iPhone. Neither could be exercised here (no Xcode, no device).
+- **Severity:** medium
+- **Workaround:** Pure decision logic (`DrivingSignal`) is tested; demo mode uses the labeled simulated vehicle; presence can be set with `scripts/household.mjs driving`.
+- **Suggestion:** Let the iOS Simulator inject CoreMotion activity and a CarPlay audio route.
+
+## 2026-10-08 · AWS · SMS through SNS needs extra account setup
+
+- **Task attempted:** Send household SMS through Amazon SNS `Publish`.
+- **Expected:** SMS to verified numbers with the existing IAM user.
+- **Actual:** New accounts are in the SMS sandbox (verified destination numbers only), the Netherlands requires a registered origination identity/sender ID for reliable delivery, and the IAM user needs `sns:Publish` in addition to Bedrock.
+- **Severity:** medium
+- **Workaround:** SMS is dry-run unless `DRY_RUN` excludes `sms`; the in-app inbox is the primary household channel.
+- **Suggestion:** Show sandbox status and country requirements next to the SMS `Publish` error.
