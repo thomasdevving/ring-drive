@@ -1,10 +1,12 @@
 import {randomUUID} from 'node:crypto';
 import {validateRule, RuleError, localDateOf} from './absence.mjs';
+import {IncidentError} from './incidents.mjs';
 
 const uuid = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const routes = {
   rule:new RegExp(`^/rules/${uuid}$`), runs:new RegExp(`^/rules/${uuid}/runs$`),
-  evaluate:new RegExp(`^/rules/${uuid}/evaluate$`), incident:new RegExp(`^/incidents/${uuid}$`)
+  evaluate:new RegExp(`^/rules/${uuid}/evaluate$`), incident:new RegExp(`^/incidents/${uuid}$`),
+  summary:new RegExp(`^/incidents/${uuid}/summary$`)
 };
 const SIMULATED_TYPES = new Set(['motion','motion.human','motion.vehicle','motion.animal','motion.other_motion','ding']);
 
@@ -12,7 +14,7 @@ const SIMULATED_TYPES = new Set(['motion','motion.human','motion.vehicle','motio
  * Household API used by the native app and scripts. The caller has already checked the client token.
  * Returns false when the path is not an API route.
  */
-export async function handleApi(req, res, url, {store, scheduler, simulation, now, json, readBody}) {
+export async function handleApi(req, res, url, {store, scheduler, incidents, simulation, now, json, readBody}) {
   const path = url.pathname, method = req.method;
   const body = async () => { const raw = await readBody(req); return raw.length ? JSON.parse(raw) : {}; };
   let match;
@@ -34,6 +36,15 @@ export async function handleApi(req, res, url, {store, scheduler, simulation, no
       return json(res, result.error ? 409 : 200, result.error ? {error:result.error} : {data:result.run, alreadyEvaluated:!!result.alreadyEvaluated}), true;
     }
     if (path === '/incidents' && method === 'GET') return json(res, 200, {data:store.incidents()}), true;
+    if (path === '/incidents' && method === 'POST') {
+      const result = await incidents.upsertIntrusion(await body());
+      return json(res, result.created ? 201 : 200, {data:result.incident}), true;
+    }
+    if ((match = path.match(routes.summary)) && method === 'GET') {
+      // Read at tap time: always answers immediately with the best stored text.
+      const incident = store.incident(match[1]); if (!incident) return json(res, 404, {error:'Incident not found'}), true;
+      return json(res, 200, {data:{...incident.summary, status:incident.summaryStatus ?? 'ready'}}), true;
+    }
     if ((match = path.match(routes.incident)) && method === 'GET') {
       const incident = store.incident(match[1]); return json(res, incident ? 200 : 404, incident ? {data:incident} : {error:'Incident not found'}), true;
     }
@@ -51,6 +62,7 @@ export async function handleApi(req, res, url, {store, scheduler, simulation, no
     }
   } catch (error) {
     if (error instanceof RuleError) return json(res, 400, {error:error.message}), true;
+    if (error instanceof IncidentError) return json(res, error.status, {error:error.message}), true;
     if (error instanceof SyntaxError) return json(res, 400, {error:'Malformed JSON'}), true;
     throw error;
   }

@@ -86,7 +86,17 @@ public struct RingWebhook: Decodable, Sendable {
     }
 }
 
-private final class RejectRingRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+/// Our own backend only: HTTPS, or plain HTTP on the simulator's loopback. Never Ring's API or OAuth hosts.
+public enum BackendOrigin {
+    public static func isAllowed(_ backend: URL) -> Bool {
+        guard let host = backend.host, !host.isEmpty, !["api.amazonvision.com", "oauth.ring.com"].contains(host.lowercased()),
+              backend.user == nil, backend.password == nil, backend.query == nil, backend.fragment == nil,
+              backend.path.isEmpty || backend.path == "/" else { return false }
+        return backend.scheme == "https" || (["localhost", "127.0.0.1"].contains(host) && backend.scheme == "http")
+    }
+}
+
+final class RejectRingRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
@@ -98,10 +108,7 @@ public struct RingAPI: Sendable {
     private let token: String
     private let session: URLSession
     public init(backend: URL, clientToken: String, session: URLSession? = nil) throws {
-        guard let host = backend.host, !host.isEmpty, !["api.amazonvision.com", "oauth.ring.com"].contains(host.lowercased()),
-              backend.user == nil, backend.password == nil, backend.query == nil, backend.fragment == nil,
-              backend.path.isEmpty || backend.path == "/",
-              backend.scheme == "https" || (["localhost", "127.0.0.1"].contains(host) && backend.scheme == "http") else { throw RingAPIError.invalidOrigin }
+        guard BackendOrigin.isAllowed(backend) else { throw RingAPIError.invalidOrigin }
         self.base = backend.appendingPathComponent("ring"); self.token = clientToken
         self.session = session ?? URLSession(configuration: .ephemeral, delegate: RejectRingRedirects(), delegateQueue: nil)
     }

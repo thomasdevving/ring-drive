@@ -34,6 +34,8 @@ import UserNotifications
     }
     @Published var duplicateCount = 0
     @Published var departureChecksRemaining = 0
+    /// Backend-generated spoken summaries (Bedrock or template), fetched ahead of time.
+    @Published var summaries: [UUID: StoredSummary] = [:]
     private var safety = ParkingSafety(allowsSimulation: true)
     private var ledger = EventLedger()
     private let speech = SpokenExplanation()
@@ -47,6 +49,12 @@ import UserNotifications
     private var clipGeneration = 0
     private var speechGeneration = 0
     private var lastActivityState = ""
+    private var syncTask: Task<Void, Never>?
+    /// Household backend client; nil until a backend URL and client key are configured.
+    var household: HouseholdAPI? {
+        guard let url = URL(string: relayURL) else { return nil }
+        return try? HouseholdAPI(backend: url, clientToken: backendToken)
+    }
     var canReview: Bool { VideoGuard.permits(incident: current, safety: safety.verdict(now: Date())) }
     var canInspectTimeline: Bool { ParkedReviewGuard.permits(safety: safety.verdict(now: Date())) }
     func incident(id: UUID) -> Incident? { current?.id == id ? current : history.first { $0.id == id } }
@@ -145,6 +153,30 @@ import UserNotifications
             }
         }
         tick()
+        syncCurrent()
+    }
+    /// Sends the incident to the backend, which stores a spoken summary; the summary is fetched in the
+    /// background so Listen never waits for Bedrock. Failures are silent: the local explanation remains.
+    func syncCurrent() {
+        guard let incident = current, let api = household else { return }
+        let names = Dictionary(devices.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        syncTask?.cancel()
+        syncTask = Task { [weak self] in
+            do {
+                try await api.sync(incident, cameraNames: names)
+                for delay in [1.5, 4.0, 10.0, 20.0] {
+                    try await Task.sleep(for: .seconds(delay))
+                    let summary = try await api.summary(incidentID: incident.id)
+                    self?.summaries[incident.id] = summary
+                    if summary.status == "ready" { break }
+                }
+            } catch {}
+        }
+    }
+    /// The text the driver hears: the stored backend summary when it covers the current evidence.
+    func spokenText(for incident: Incident) -> String {
+        if let summary = summaries[incident.id], summary.matches(incident) { return summary.text }
+        return incident.decision.explanation
     }
     func transition(_ next: IncidentState) {
         do { try current?.transition(to: next, now: Date(), safety: verdict); persist() }
@@ -155,7 +187,7 @@ import UserNotifications
         speaking = true; let id = incident.id; let revision = incident.explanationRevisionID
         speechGeneration += 1; let generation = speechGeneration
         do {
-            try speech.speak(incident.decision.explanation) { [weak self] finished in
+            try speech.speak(spokenText(for: incident)) { [weak self] finished in
                 guard let self, generation == self.speechGeneration else { return }; self.speaking = false
                 guard self.current?.id == id else { return }
                 if finished {

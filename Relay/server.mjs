@@ -5,6 +5,8 @@ import { RingClient, RingError, EncryptedTokenStore, RING_ORIGIN } from './ring-
 import { Store } from './store.mjs';
 import { AbsenceScheduler } from './scheduler.mjs';
 import { handleApi } from './api.mjs';
+import { IncidentService } from './incidents.mjs';
+import { Summarizer, bedrockClientFromEnv, DEFAULT_MODEL } from './summary.mjs';
 
 const API_PREFIXES = ['/rules', '/incidents', '/simulate'];
 
@@ -14,7 +16,8 @@ export function verifySignature(key, raw, received = '') {
   return timingSafeEqual(createHmac('sha256', key).update(raw).digest(), Buffer.from(hex, 'hex'));
 }
 export function createRelay({ signingKey, clientToken, expectedAccount, ring, now = () => Date.now(), store = new Store(null, now),
-  scheduler = new AbsenceScheduler({store, ring, now}), simulation = false }) {
+  incidents = new IncidentService({store, now}),
+  scheduler = new AbsenceScheduler({store, ring, now, onIncident:incident => incidents.refreshSummary(incident.id)}), simulation = false }) {
   if (!clientToken) throw new Error('Configure RELAY_CLIENT_TOKEN using scripts/setup_ring.mjs.');
   const queue = [], seen = new Map(), calls = [];
   function json(res, code, body) { res.writeHead(code, {'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(body)); }
@@ -77,7 +80,7 @@ export function createRelay({ signingKey, clientToken, expectedAccount, ring, no
     if (API_PREFIXES.some(prefix => path === prefix || path.startsWith(prefix + '/'))) {
       if (!authorised(req)) return json(res, 401, {error:'Client token required'});
       try {
-        if (await handleApi(req, res, new URL(req.url, 'http://localhost'), {store, scheduler, simulation, now, json, readBody})) return;
+        if (await handleApi(req, res, new URL(req.url, 'http://localhost'), {store, scheduler, incidents, simulation, now, json, readBody})) return;
       } catch (error) { return json(res, error instanceof RingError ? error.status : 500, {error:'Request failed'}); }
       return json(res, 404, {error:'Not found'});
     }
@@ -114,12 +117,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const store = process.env.TOKEN_STORE_KEY ? new EncryptedTokenStore(new URL('./tokens.local.enc',import.meta.url).pathname,process.env.TOKEN_STORE_KEY) : undefined;
   const ring = new RingClient({accessToken:process.env.RING_ACCESS_TOKEN,refreshToken:process.env.RING_REFRESH_TOKEN,clientID:process.env.RING_CLIENT_ID,clientSecret:process.env.RING_CLIENT_SECRET,expectedAccount:process.env.RING_ACCOUNT_ID,store});
   const household = await Store.open(process.env.DATA_FILE || new URL('./data/household.local.json',import.meta.url).pathname);
-  const scheduler = new AbsenceScheduler({store:household, ring:process.env.RING_ACCESS_TOKEN ? ring : null, log:message => console.log(message)});
+  const log = message => console.log(message);
+  const bedrock = bedrockClientFromEnv();
+  const summarizer = new Summarizer({client:bedrock, model:process.env.BEDROCK_MODEL_ID || DEFAULT_MODEL, timeoutMs:Number(process.env.BEDROCK_TIMEOUT_MS) || 15000, log});
+  const incidents = new IncidentService({store:household, summarizer, log});
+  const scheduler = new AbsenceScheduler({store:household, ring:process.env.RING_ACCESS_TOKEN ? ring : null, log, onIncident:incident => incidents.refreshSummary(incident.id)});
   const server = createRelay({signingKey:process.env.RING_HMAC_KEY, clientToken:process.env.RELAY_CLIENT_TOKEN, expectedAccount:process.env.RING_ACCOUNT_ID,ring,
-    store:household, scheduler, simulation:process.env.SIMULATION_ENABLED === '1'});
+    store:household, incidents, scheduler, simulation:process.env.SIMULATION_ENABLED === '1'});
   const port = Number(process.env.PORT ?? 8787);
   server.listen(port, '127.0.0.1', () => {
     scheduler.start();
-    console.log(`Ring Drive backend on http://127.0.0.1:${port}; Ring credentials stay on this backend. Absence rules: ${household.rules().length}.`);
+    console.log(`Ring Drive backend on http://127.0.0.1:${port}; Ring credentials stay on this backend. Absence rules: ${household.rules().length}. Summaries: ${bedrock ? `Bedrock ${summarizer.model}` : 'template only'}.`);
   });
 }

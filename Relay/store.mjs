@@ -19,7 +19,7 @@ export class Store {
     }
     return store;
   }
-  constructor(path, now) { this.path = path; this.now = now; this.data = {rules:[], runs:[], incidents:[], observations:[]}; this.writing = Promise.resolve(); }
+  constructor(path, now = () => Date.now()) { this.path = path; this.now = now; this.data = {rules:[], runs:[], incidents:[], observations:[]}; this.writing = Promise.resolve(); }
   async save() {
     if (!this.path) return;
     const snapshot = JSON.stringify(this.data, null, 1);
@@ -63,7 +63,15 @@ export class Store {
   incident(id) { return this.data.incidents.find(i => i.id === id) ?? null; }
   async createIncident(fields) {
     const incident = {id:randomUUID(), createdAt:new Date(this.now()).toISOString(), ...fields};
+    if (this.incident(incident.id)) throw new Error('Incident already exists');
     this.data.incidents.push(incident); this.#cap('incidents'); await this.save(); return incident;
+  }
+
+  /** Applies a mutation to a stored incident and saves; returns the updated incident or null. */
+  async updateIncident(id, mutate) {
+    const incident = this.incident(id); if (!incident) return null;
+    mutate(incident); incident.updatedAt = new Date(this.now()).toISOString();
+    await this.save(); return incident;
   }
 
   /** Observations from signed webhooks or the simulation endpoint, kept 24 h for absence rules. */

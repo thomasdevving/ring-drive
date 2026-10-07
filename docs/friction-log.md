@@ -82,3 +82,13 @@ Severity: **blocker** (cannot proceed without a workaround), **high** (feature d
 - **Severity:** high
 - **Workaround:** Rules are configured through the authenticated backend API and `scripts/rules.mjs`. The native screen follows once Xcode 26.x is installed.
 - **Suggestion:** n/a (environment).
+
+## 2026-10-08 · AWS · New account blocks Bedrock until verification completes
+
+- **Task attempted:** First Bedrock call (Claude via `InvokeModel`, eu-central-1) with a fresh IAM user scoped to `bedrock:InvokeModel`.
+- **Steps taken:** Called `anthropic.claude-opus-5-5`, `global.anthropic.claude-opus-5-5`, `eu.anthropic.claude-opus-5-5`, `anthropic.claude-haiku-5-5` through `@anthropic-ai/bedrock-sdk`, and the Mantle endpoint.
+- **Expected:** A response, or a clear model-access error.
+- **Actual:** HTTP 403 "Your account is currently being verified. Verification normally takes less than 2 hours." The `eu.` prefix returned 400 "The provided model identifier is invalid", so these models are invoked with the bare or `global.` ID. The Mantle endpoint returned 403 "not available for this account" for Opus 5.5 and 404 for Haiku 5.5 in this region.
+- **Severity:** high (blocks live verification of Phase 2 for a few hours)
+- **Workaround:** Summaries fall back to the deterministic template; Bedrock is tested with an injected client and verified live with `node scripts/verify_bedrock.mjs` once the account is verified.
+- **Suggestion:** Show the verification state on the Bedrock console landing page and in the error code (not only in the message), so tooling can distinguish it from IAM denials.

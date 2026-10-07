@@ -121,6 +121,57 @@ node scripts/rules.mjs incidents
 
 A native rules screen is not included yet; rules are managed through this API.
 
+### Incident summaries with Amazon Bedrock
+
+When the backend creates an incident (an absence rule fires) or the driver app syncs a camera incident (`POST /incidents`), the backend immediately stores a deterministic template summary and starts one Amazon Bedrock request in the background. A valid model answer replaces the template. When the driver taps **Listen** (or asks Siri), the app speaks the stored text from `GET /incidents/{id}/summary`; it never waits for Bedrock. If the stored summary was generated for an older set of observations, the app speaks its local explanation instead.
+
+| Item | Value |
+|---|---|
+| Service | Amazon Bedrock Runtime, `InvokeModel` (Anthropic Messages format) |
+| Client | `@anthropic-ai/bedrock-sdk` (`AnthropicBedrock`), called in `Relay/summary.mjs` → `Summarizer.summarize` |
+| Model | `BEDROCK_MODEL_ID`, default `anthropic.claude-opus-5-5` (Claude Opus 5.5), effort `low`. `anthropic.claude-haiku-5-5` also works with the same code. |
+| Region | `AWS_REGION` (for example `eu-central-1` or `us-east-1`). Use the bare model ID or the `global.` profile; the `eu.` prefix is rejected for these models. |
+| Credentials | Standard AWS chain: `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `Relay/.env.local`, `AWS_PROFILE`, or `AWS_BEARER_TOKEN_BEDROCK`. Never committed. |
+| Timeout | `BEDROCK_TIMEOUT_MS`, default 15 000 ms; one SDK retry |
+| Disable | `BEDROCK_ENABLED=0` (template only) |
+
+Least-privilege IAM policy for the backend user or role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["bedrock:InvokeModel"],
+    "Resource": ["arn:aws:bedrock:*::foundation-model/*", "arn:aws:bedrock:*:*:inference-profile/*"]
+  }]
+}
+```
+
+**Input.** The model receives only JSON facts: camera labels, the order of observations, `HH:MM` times in the household time zone, durations in seconds, and for absences the rule name, window and exit cameras. Person labels, device IDs, account IDs and video never leave the backend.
+
+**System prompt** (`SYSTEM_PROMPT` in `Relay/summary.mjs`):
+
+```text
+You write short spoken alerts that a driver hears through the car speakers. The input is JSON facts from home security cameras.
+
+Rules:
+- Describe only what the facts say the cameras observed: which cameras, in what order, at what times, and for how long.
+- Never speculate about who someone is, what they intend, or whether anyone is in danger. Never use words such as burglar, intruder, thief, stranger, suspicious, break-in, threat or danger.
+- For an absence, say which cameras recorded no activity during the window. Never say where any person is, and never say that someone has or has not left.
+- Use only times and durations that appear in the facts. Write times as HH:MM and durations in whole seconds.
+- If the facts say the video is locked, end by saying the video stays locked until the driver is parked.
+- Write two or three short sentences of plain spoken English, at most 60 words, with no lists, markdown, or quotation marks.
+```
+
+**Output checks before storing.** The response must end normally (`end_turn`), be at most four sentences and 450 characters, contain no speculative words (burglar, intruder, suspicious, stranger, threat…), make no claims about where a person is for absences, contain no list or markdown formatting, and mention only times and durations present in the facts. Anything else, as well as errors, refusals and timeouts, falls back to the deterministic template, with the reason stored in `summary.fallbackReason`.
+
+Check the live integration without printing credentials:
+
+```sh
+node scripts/verify_bedrock.mjs
+```
+
 ### Registered-app linking and documentation MCP
 
 For remote token delivery, `node scripts/create_token_input.mjs` creates a standalone `../Ring-token-invoer.html` containing only this workspace's public key. Download and open it locally in a current browser, paste the access token there and send only the `RINGDRIVE-TOKEN-BOX:` encrypted envelope back. The page uses WebCrypto RSA-OAEP SHA-256 to wrap a new AES-256-GCM key for each message; it has no imports, storage or network calls and a restrictive CSP. Its private key remains in ignored `Relay/.secrets/` with private permissions. `scripts/import_ring_token.mjs` imports an envelope from `Relay/.secrets/incoming.local.txt` without printing plaintext. This is a local demo handoff utility, not a deployed identity service. File-preview viewers may disable JavaScript; use a real browser on a computer when needed.
