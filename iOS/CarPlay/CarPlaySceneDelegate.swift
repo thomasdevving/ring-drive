@@ -33,8 +33,8 @@ import RingDriveCore
                 self?.controller?.pushTemplate(template, animated: true, completion: nil); completion()
             }
         }
-        stop.isEnabled = [.explained, .stopRequested, .navigating].contains(model.current?.state ?? .detected)
-        let heading = model.current?.decision.priority == .urgent ? "Rear door activity" : "Ring Drive"
+        stop.isEnabled = model.current?.requiresExplanation == false && [.explained, .stopRequested, .navigating].contains(model.current?.state ?? .detected)
+        let heading = model.current?.status == .resolved ? "Observed activity ended" : (model.current?.decision.priority == .urgent ? "Rear door activity" : "Ring Drive")
         let template = CPListTemplate(title: heading, sections: [CPListSection(items: [listen, stop], header: "Video review on iPhone after parking", sectionIndexTitle: nil)])
         controller?.setRootTemplate(template, animated: false, completion: nil)
     }

@@ -65,6 +65,10 @@ struct RootView: View {
                     if model.canReview, let player = model.player {
                         GuardedPlayer(player: player).accessibilityIdentifier("incidentVideo")
                         Label("Parked confirmed", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
+                        if let event = model.reviewedEvent {
+                            Text("\(event.zone.locationLabel) · \(event.occurredAt.formatted(date: .omitted, time: .standard))")
+                                .font(.subheadline).accessibilityIdentifier("reviewedMoment")
+                        }
                         Text(model.current?.events.first?.source == .synthetic ? "Synthetic incident footage · demonstration only" : "Recording retrieved from the official Ring API")
                             .font(.caption).foregroundStyle(.secondary)
                     } else { ContentUnavailableView("Video locked", systemImage: "lock.fill", description: Text(model.verdict.reason)) }

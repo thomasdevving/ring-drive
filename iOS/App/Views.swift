@@ -19,8 +19,13 @@ struct DriveView: View {
                     DriverActions()
                     if !model.stops.isEmpty { StopResults() }
                     SafetyStatus()
-                    NavigationLink { IncidentDetailView(incident: incident) } label: { Label("Why this alert?", systemImage: "list.bullet.rectangle") }
+                    if incident.state == .navigating {
+                        Label("Navigating with Apple Maps", systemImage: "arrow.turn.up.right")
+                            .font(.subheadline).accessibilityIdentifier("driverProgress")
+                    }
+                    NavigationLink { IncidentDetailView(incidentID: incident.id) } label: { Label("Incident timeline", systemImage: "list.bullet.rectangle") }
                         .frame(minHeight: 44)
+                        .accessibilityIdentifier("openTimeline")
                 } else {
                     Image(systemName: "house.and.flag.fill").font(.largeTitle).foregroundStyle(.blue).accessibilityHidden(true)
                     Text("Home awareness.\nEyes on the road.").font(.largeTitle.bold())
@@ -48,16 +53,18 @@ struct DriveView: View {
 
 struct IncidentFocus: View {
     let incident: Incident
-    var isUrgent: Bool { incident.decision.priority == .urgent }
+    var isUrgent: Bool { incident.status == .active && incident.decision.priority == .urgent }
+    var isResolved: Bool { incident.status == .resolved }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Label(isUrgent ? "Needs your attention" : (incident.decision.priority == .passive ? "No action needed" : "Awaiting better evidence"),
+            Label(isResolved ? "Observed activity ended" : (isUrgent ? "Needs your attention" : (incident.decision.priority == .passive ? "No action needed" : "Awaiting better evidence")),
                   systemImage: isUrgent ? "exclamationmark.triangle.fill" : "checkmark.shield.fill")
                 .foregroundStyle(isUrgent ? .orange : (incident.decision.priority == .passive ? .green : .secondary))
                 .font(.subheadline.weight(.semibold))
-            Text(isUrgent ? "Activity at your\nrear door" : (incident.decision.priority == .passive ? "Package delivered.\nVisitor has left." : "Activity detected.\nConfidence is limited."))
+            Text(isResolved ? "Departure observed.\nIncident updated." : (isUrgent ? "Activity at your\nrear door" : (incident.decision.priority == .passive ? "Package delivered.\nVisitor has left." : "Activity detected.\nConfidence is limited.")))
                 .font(.largeTitle.bold()).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("incidentHeadline")
-            CameraTrace(events: incident.events)
+            CameraTrace(events: Array(incident.events.suffix(3)))
+            if incident.events.count > 3 { Text("\(incident.events.count) observations in this incident · full timeline after parking").font(.caption).foregroundStyle(.secondary) }
             Text(isUrgent ? "Side entrance activity was followed by repeated rear-door observations. Listen for the evidence." : incident.decision.explanation)
                 .font(.body).foregroundStyle(.secondary)
             Label(incident.events.first?.source.label ?? "No evidence", systemImage: incident.events.first?.source == .synthetic ? "testtube.2" : "network")
@@ -96,7 +103,8 @@ struct DriverActions: View {
                 Label(model.speaking ? "Explaining…" : "Listen to explanation", systemImage: model.speaking ? "waveform" : "speaker.wave.2.fill")
                     .frame(maxWidth: .infinity, minHeight: 34)
             }.buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.black).disabled(model.speaking).accessibilityIdentifier("listen")
-            if let state = model.current?.state, state != .notified && state != .triaged && state != .detected {
+            if let state = model.current?.state, model.current?.requiresExplanation == false,
+               state != .notified && state != .triaged && state != .detected {
                 if state == .explained || state == .stopRequested || state == .navigating {
                     Button { Task { await model.findStop() } } label: {
                         Label(model.searching ? "Finding nearby stops…" : "Find a safe place to stop", systemImage: "mappin.and.ellipse")
@@ -166,7 +174,7 @@ struct CarPlayPreview: View {
                 VStack(alignment: .leading, spacing: 24) {
                     Label("Interactive CarPlay simulation", systemImage: "testtube.2").font(.subheadline).foregroundStyle(.orange)
                     if let incident = model.current {
-                        Text(incident.decision.priority == .urgent ? "Rear door activity" : "Home update").font(.largeTitle.bold())
+                        Text(incident.status == .resolved ? "Observed activity ended" : (incident.decision.priority == .urgent ? "Rear door activity" : "Home update")).font(.largeTitle.bold())
                         Text("Listen first. Stop safely to review video.").font(.title3).foregroundStyle(.secondary)
                         DriverActions()
                         if !model.stops.isEmpty { StopResults() }
@@ -191,45 +199,127 @@ struct IncidentListView: View {
         }.navigationTitle("Incidents")
     }
     private func incidentRow(_ incident: Incident) -> some View {
-        NavigationLink { IncidentDetailView(incident: incident) } label: {
+        let title: String
+        if incident.status == .resolved { title = "Observed activity ended" }
+        else if incident.decision.priority == .urgent { title = "Rear-door activity" }
+        else if incident.decision.priority == .passive { title = "Package delivered" }
+        else { title = "Evidence needs review" }
+        let subtitle = [incident.status.rawValue.capitalized, incident.decision.priority.rawValue.capitalized,
+                        incident.events.first?.source.label ?? "Unknown"].joined(separator: " · ")
+        return NavigationLink { IncidentDetailView(incidentID: incident.id) } label: {
             VStack(alignment: .leading, spacing: 8) {
-                Text(incident.decision.priority == .urgent ? "Rear-door activity" : (incident.decision.priority == .passive ? "Package delivered" : "Evidence needs review")).font(.headline)
-                Text(incident.decision.priority.rawValue.capitalized + " · " + (incident.events.first?.source.label ?? "Unknown")).font(.caption).foregroundStyle(.secondary)
+                Text(title).font(.headline)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }.padding(.vertical, 8)
         }
     }
 }
 
 struct IncidentDetailView: View {
+    @EnvironmentObject var model: AppModel
+    let incidentID: UUID
+    var body: some View {
+        Group {
+            if !model.canInspectTimeline {
+                ContentUnavailableView {
+                    Label("Park to inspect the timeline", systemImage: "lock.shield.fill")
+                } description: {
+                    Text("Hear the explanation in Drive. Detailed camera evidence becomes available after continuous standstill and your parking confirmation.")
+                } actions: {
+                    Button("Return to Drive") { model.selectedTab = 0 }.frame(minHeight: 44)
+                }.accessibilityIdentifier("timelineLocked")
+            } else if let incident = model.incident(id: incidentID) {
+                IncidentTimelineView(incident: incident)
+            } else {
+                ContentUnavailableView("Incident unavailable", systemImage: "clock", description: Text("This incident is no longer in the saved history."))
+            }
+        }.navigationTitle("Incident timeline").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct IncidentTimelineView: View {
+    @EnvironmentObject var model: AppModel
     let incident: Incident
     var body: some View {
         List {
             Section("Why this alert?") {
                 Text(incident.decision.explanation)
+                LabeledContent("Incident status", value: incident.status.rawValue.capitalized)
                 LabeledContent("Priority", value: incident.decision.priority.rawValue.capitalized)
                 LabeledContent("Rule confidence", value: "\(Int(incident.decision.confidence * 100))%")
                 Text("A rule score, not a calibrated probability. Camera correlation does not verify a person's identity.").font(.footnote).foregroundStyle(.secondary)
-                ForEach(incident.decision.reasons, id: \.self) { Text($0) }
             }
-            Section("State transitions") {
-                ForEach(incident.audit) { entry in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(entry.state.rawValue).font(.subheadline.weight(.semibold))
-                        Text(entry.note).font(.footnote).foregroundStyle(.secondary)
-                        Text(entry.at, style: .time).font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 4)
+            Section {
+                ForEach(incident.timeline) { item in
+                    IncidentTimelineRow(item: item, incidentID: incident.id)
                 }
+            } header: { Text("Camera observations & decisions") }
+              footer: { Text("Observation times come from the camera evidence; decisions and actions show when Ring Drive processed them. Rules: \(incident.decision.ruleVersion).") }
+            Section("Saved incident") {
+                LabeledContent("Observations", value: String(incident.events.count))
+                Text(incident.id.uuidString).font(.caption.monospaced()).textSelection(.enabled)
             }
-            Section("Camera evidence · \(incident.decision.ruleVersion)") {
-                ForEach(incident.events) { event in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("\(event.zone.rawValue.capitalized) · \(event.kind.rawValue)")
-                        Text(event.source.label).font(.caption).foregroundStyle(.secondary)
-                        Text(event.id).font(.caption.monospaced()).textSelection(.enabled)
+        }.accessibilityIdentifier("incidentTimeline")
+    }
+}
+
+struct IncidentTimelineRow: View {
+    @EnvironmentObject var model: AppModel
+    let item: IncidentTimelineItem
+    let incidentID: UUID
+    @ScaledMetric(relativeTo: .subheadline) private var symbolWidth: CGFloat = 24
+    var body: some View {
+        switch item {
+        case .observation(let event):
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(model.cameraName(for: event)).font(.subheadline)
+                    if let component = event.componentID { Text("Camera module \(component)").font(.caption) }
+                    Text(event.source.label).font(.caption).foregroundStyle(.secondary)
+                    Text("Evidence score: \(Int(event.confidence * 100))% · not an identity match").font(.footnote).foregroundStyle(.secondary)
+                    Text(event.id).font(.caption.monospaced()).textSelection(.enabled)
+                    if incidentID == model.current?.id, model.canReview {
+                        Button(event.source == .synthetic ? "Review illustrative demo clip" : "Review this camera moment") {
+                            Task { await model.review(event: event) }
+                        }.buttonStyle(.borderless).frame(minHeight: 44).accessibilityIdentifier("reviewMoment-\(event.zone.rawValue)")
+                        if event.source == .synthetic { Text("The bundled clip illustrates the scenario; it is not footage of this observation.").font(.footnote).foregroundStyle(.secondary) }
                     }
-                }
+                }.padding(.vertical, 8)
+            } label: {
+                timelineLabel(event.zone.locationLabel, detail: event.kind.observationLabel, symbol: "video.fill", color: .blue)
+                    .accessibilityIdentifier("observation-\(event.zone.rawValue)")
             }
-        }.navigationTitle("Incident evidence").navigationBarTitleDisplayMode(.inline)
+        case .assessment(let assessment):
+            VStack(alignment: .leading, spacing: 8) {
+                timelineLabel(assessmentTitle(assessment), detail: assessment.isRecovered ? "Recovered from saved history" : "Evidence evaluated",
+                              symbol: assessment.change == .resolved ? "checkmark.circle" : "checklist",
+                              color: assessment.change == .resolved ? .green : (assessment.decision.priority == .urgent ? .orange : .blue))
+                Text(assessment.decision.explanation).font(.subheadline)
+                ForEach(assessment.decision.reasons, id: \.self) { Text($0).font(.footnote).foregroundStyle(.secondary) }
+                Text("\(assessment.evidenceKeys.count) observations · \(assessment.decision.ruleVersion)").font(.caption).foregroundStyle(.secondary)
+            }.padding(.vertical, 4)
+        case .transition(let entry):
+            timelineLabel(entry.state.rawValue, detail: entry.note, symbol: "arrow.right.circle", color: .secondary)
+                .padding(.vertical, 4)
+        }
+    }
+    private func assessmentTitle(_ assessment: IncidentAssessment) -> String {
+        switch assessment.change {
+        case .resolved: "Observed activity ended"
+        case .reopened: "Incident reopened · new activity"
+        case .continued: "Update · \(assessment.decision.priority.rawValue)"
+        default: assessment.decision.priority == .urgent ? "Escalated · attention needed" : "Assessment · \(assessment.decision.priority.rawValue)"
+        }
+    }
+    private func timelineLabel(_ title: String, detail: String, symbol: String, color: Color) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol).font(.subheadline).foregroundStyle(color).frame(width: symbolWidth).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.footnote).foregroundStyle(.secondary)
+                Text(item.at, format: .dateTime.hour().minute().second()).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
@@ -249,6 +339,24 @@ struct DemoView: View {
                 }
                 LabeledContent("Duplicate deliveries ignored") {
                     Text(String(model.duplicateCount)).accessibilityIdentifier("duplicateCount")
+                }
+            }
+            if let incident = model.current, incident.events.first?.source == .synthetic {
+                Section("Update this synthetic incident") {
+                    LabeledContent("Incident reference") { Text(String(incident.id.uuidString.prefix(8))).accessibilityIdentifier("incidentReference") }
+                    LabeledContent("Status") { Text(incident.status.rawValue.capitalized).accessibilityIdentifier("incidentStatus") }
+                    LabeledContent("Observations") { Text(String(incident.events.count)).accessibilityIdentifier("observationCount") }
+                    LabeledContent("Urgent alert requests") { Text(String(incident.alertRequestCount)).accessibilityIdentifier("alertRequestCount") }
+                    Button(incident.status == .resolved ? "Simulate activity returning" : "Add continuing activity") { model.addDemoActivity() }
+                        .frame(minHeight: 44).accessibilityIdentifier("appendActivity")
+                    Button("Add uncertain activity") { model.addDemoActivity(uncertain: true) }.frame(minHeight: 44).accessibilityIdentifier("appendUncertain")
+                    Button("Repeat the last delivery") { model.repeatDemoDelivery() }.frame(minHeight: 44).accessibilityIdentifier("repeatDelivery")
+                    Button(model.departureChecksRemaining > 0 ? "Checking departure · \(model.departureChecksRemaining)s" : "Simulate two departure observations") {
+                        model.beginDepartureVerification()
+                    }.disabled(model.departureChecksRemaining > 0 || incident.status == .resolved)
+                        .frame(minHeight: 44).accessibilityIdentifier("departureEvidence")
+                    Text("Departure uses two explicit synthetic observations, at least 10 seconds apart. Silence alone never ends an incident. Continued activity updates quietly; a reopened urgent alert has a 120-second cooldown.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             Section("Vehicle & Maps faults") {

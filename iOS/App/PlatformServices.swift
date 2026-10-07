@@ -74,9 +74,10 @@ import RingDriveCore
     var status = "Not started"
     func update(_ incident: Incident, safety: SafetyVerdict) async {
         let state = DriveActivityAttributes.ContentState(
-            headline: incident.decision.priority == .urgent ? "Activity at the rear door" : "Home update",
-            detail: incident.decision.priority == .passive ? "Delivered · no action needed" : (safety.allowsVideo ? "Parked · review on iPhone" : "Video locked · stop safely"),
-            urgent: incident.decision.priority == .urgent, videoLocked: !safety.allowsVideo,
+            headline: incident.status == .resolved ? "Observed activity ended" : (incident.decision.priority == .urgent ? "Activity at the rear door" : "Home update"),
+            detail: incident.status == .resolved ? "Departure evidence · route unchanged" : (incident.decision.priority == .passive ? "Delivered · no action needed" : (VideoGuard.permits(incident: incident, safety: safety) ? "Parked · review on iPhone" : "Video locked · stop safely")),
+            urgent: incident.status == .active && incident.decision.priority == .urgent,
+            videoLocked: !VideoGuard.permits(incident: incident, safety: safety),
             synthetic: incident.events.first?.source == .synthetic)
         let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(180))
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { status = "Live Activities disabled in Settings"; return }
@@ -87,7 +88,9 @@ import RingDriveCore
                 status = "Live Activity active"
             } catch { status = "Live Activity unavailable: \(error.localizedDescription)" }
         } else if let activity {
-            await activity.update(content, alertConfiguration: incident.decision.priority == .urgent ? .init(title: "Ring Drive", body: "Activity at your rear door. Stop safely before reviewing.", sound: .default) : nil)
+            // Urgent notification requests are centrally deduplicated by the incident policy.
+            // Live Activity state and parking updates must never repeat their sound.
+            await activity.update(content, alertConfiguration: nil)
         }
     }
     func clear() async { for a in Activity<DriveActivityAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }; activity = nil; status = "Not started" }

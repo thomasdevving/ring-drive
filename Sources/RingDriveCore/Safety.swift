@@ -80,6 +80,6 @@ public struct ParkingSafety: Sendable {
 
 public enum VideoGuard {
     public static func permits(incident: Incident?, safety: SafetyVerdict, now: Date = Date()) -> Bool {
-        incident?.state == .videoUnlocked && safety.allowsVideo && safety.state == .parked && safety.isFresh(at: now)
+        incident?.state == .videoUnlocked && incident?.requiresExplanation == false && ParkedReviewGuard.permits(safety: safety, now: now)
     }
 }

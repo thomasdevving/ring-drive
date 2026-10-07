@@ -18,6 +18,7 @@ import UserNotifications
     @Published var message: String?
     @Published var player: AVPlayer?
     @Published var showingVideo = false
+    @Published var reviewedEvent: CameraEvent?
     @Published var selectedTab = 0
     @Published var devices: [RingDevice] = []
     @Published var zones: [String: Zone] = [:]
@@ -32,6 +33,7 @@ import UserNotifications
         didSet { UserDefaults.standard.set(relayURL, forKey: "ring-backend-url") }
     }
     @Published var duplicateCount = 0
+    @Published var departureChecksRemaining = 0
     private var safety = ParkingSafety(allowsSimulation: true)
     private var ledger = EventLedger()
     private let speech = SpokenExplanation()
@@ -39,10 +41,19 @@ import UserNotifications
     private let motion = MotionMonitor()
     private var timer: Timer?
     private var pollTask: Task<Void, Never>?
+    private var departureTask: Task<Void, Never>?
+    private var departureStartedAt: Date?
     private var lifecycleActive = true
     private var clipGeneration = 0
+    private var speechGeneration = 0
     private var lastActivityState = ""
     var canReview: Bool { VideoGuard.permits(incident: current, safety: safety.verdict(now: Date())) }
+    var canInspectTimeline: Bool { ParkedReviewGuard.permits(safety: safety.verdict(now: Date())) }
+    func incident(id: UUID) -> Incident? { current?.id == id ? current : history.first { $0.id == id } }
+    func cameraName(for event: CameraEvent) -> String {
+        devices.first { $0.id == event.deviceID }?.displayName
+            ?? (event.source == .synthetic ? "Demo \(event.zone.rawValue) camera" : "Camera \(event.deviceID)")
+    }
     var backendToken: String { TokenVault.read(key: "relay-token") }
     private var ringAccountID: String?
     private var connectedAPI: RingAPI?
@@ -68,7 +79,7 @@ import UserNotifications
         if ProcessInfo.processInfo.arguments.contains("--demo-urgent") { run(.rearDoor) }
     }
     func setDemoMode(_ enabled: Bool) {
-        speech.cancel(); stopPolling(); closeVideo(); motion.stop()
+        cancelExplanation(); cancelDepartureVerification(); stopPolling(); closeVideo(); motion.stop()
         demoMode = enabled; demoStationary = false; safety = ParkingSafety(allowsSimulation: enabled)
         current?.revokeVideo(now: Date(), reason: "Evidence source changed")
         if !enabled { motion.start() }
@@ -76,11 +87,12 @@ import UserNotifications
     }
     func setActive(_ active: Bool) {
         lifecycleActive = active
-        if !active { safety.invalidate(); closeVideo(); speech.cancel() }
+        if !active { safety.invalidate(); closeVideo(); cancelExplanation(); cancelDepartureVerification() }
         tick()
     }
     func tick() {
         let now = Date()
+        if let departureStartedAt { departureChecksRemaining = max(0, Int(ceil(IncidentUpdatePolicy.departureInterval - now.timeIntervalSince(departureStartedAt)))) }
         if demoMode && lifecycleActive {
             safety.ingest(.init(at: now, speed: demoStationary ? 0 : 14, horizontalAccuracy: uncertainParking ? 90 : 4,
                                 motionStationary: demoStationary && !uncertainParking, motionConfidence: uncertainParking ? 0.3 : 0.95, source: .simulator))
@@ -91,34 +103,48 @@ import UserNotifications
             if showingVideo || player != nil { closeVideo() }
         }
         if let current {
-            let key = "\(current.id)\(current.state)\(verdict.allowsVideo)"
+            let key = "\(current.id)\(current.state)\(current.assessments.last?.id.uuidString ?? "")\(current.status)\(verdict.allowsVideo)"
             if key != lastActivityState { lastActivityState = key; Task { await live.update(current, safety: verdict); activityStatus = live.status } }
         }
         persist()
     }
     func run(_ scenario: DemoScenario) {
         if !demoMode { setDemoMode(true) }
-        speech.cancel(); closeVideo(); stops = []; message = nil; demoStationary = false; safety.invalidate(); tick()
+        cancelExplanation(); cancelDepartureVerification(); closeVideo(); stops = []; message = nil; demoStationary = false; safety.invalidate(); tick()
         receive(scenario.events(now: Date()), replace: true)
         runtimeStatus = "Synthetic scenario · no Ring runtime proof"
         selectedTab = 0
     }
     func receive(_ incoming: [CameraEvent], replace: Bool = false) {
+        guard Set(incoming.map(\.accountID)).count <= 1,
+              Set(incoming.map { $0.source == .synthetic }).count <= 1 else {
+            message = "Evidence from different households or simulation sources cannot be combined."; return
+        }
         let accepted = incoming.filter { ledger.ingest($0, now: Date()) }; duplicateCount = ledger.duplicateCount
         guard !accepted.isEmpty else { return }
-        if replace || current == nil || current?.events.first?.accountID != accepted.first?.accountID || current?.events.first?.source != accepted.first?.source {
+        let now = Date()
+        var change = IncidentChange.continued
+        if replace || current == nil || current?.canJoin(accepted, now: now) != true {
+            cancelExplanation(); closeVideo(); stops = []
             if let current { history.insert(current, at: 0) }
-            let d = TriageEngine().evaluate(accepted, now: Date()); current = Incident(events: accepted, decision: d, now: Date())
+            let d = TriageEngine().evaluate(accepted, now: now); current = Incident(events: accepted, decision: d, now: now)
             transition(.triaged)
+            transition(.notified)
         } else if var incident = current {
-            speech.cancel(); closeVideo()
-            let events = (incident.events + accepted).filter { Date().timeIntervalSince($0.occurredAt) <= 180 }
-            let decision = TriageEngine().evaluate(events, now: Date())
-            incident.revise(events: events, decision: decision, now: Date()); current = incident
+            change = incident.appendEvidence(accepted, now: now)
+            guard change != .ignored else { return }
+            current = incident
+            if change.requiresNewExplanation { cancelExplanation(); closeVideo() }
+            else if change == .resolved { cancelExplanation() }
         }
-        transition(.notified)
-        if let incident = current { notify(incident); Task { await live.update(incident, safety: verdict); activityStatus = live.status } }
-        persist()
+        if var incident = current {
+            if incident.requestUrgentAlert(now: now, reopened: change == .reopened) { current = incident; notify(incident) }
+            if incident.status == .resolved {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [incident.id.uuidString])
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [incident.id.uuidString])
+            }
+        }
+        tick()
     }
     func transition(_ next: IncidentState) {
         do { try current?.transition(to: next, now: Date(), safety: verdict); persist() }
@@ -126,17 +152,54 @@ import UserNotifications
     }
     func explain() {
         guard let incident = current, !speaking else { return }
-        speaking = true; let id = incident.id
+        speaking = true; let id = incident.id; let revision = incident.explanationRevisionID
+        speechGeneration += 1; let generation = speechGeneration
         do {
             try speech.speak(incident.decision.explanation) { [weak self] finished in
-                guard let self else { return }; self.speaking = false
+                guard let self, generation == self.speechGeneration else { return }; self.speaking = false
                 guard self.current?.id == id else { return }
-                if finished && self.current?.state == .notified { self.transition(.explained) }
+                if finished {
+                    if self.current?.acknowledgeExplanation(revision: revision, now: Date()) != true {
+                        self.message = "The incident changed during playback. Listen to the updated explanation before continuing."
+                    }
+                    self.persist()
+                }
                 if !finished { self.message = "Explanation interrupted. Tap Listen again before requesting a stop." }
             }
         } catch { speaking = false; message = "Audio is unavailable. Check the output volume and try Listen again." }
     }
+    private func cancelExplanation() { speechGeneration += 1; speech.cancel(); speaking = false }
+    func addDemoActivity(uncertain: Bool = false) {
+        guard let incident = current, incident.events.first?.source == .synthetic,
+              let anchor = incident.events.last(where: { $0.kind == .person || $0.kind == .motion || $0.kind == .doorbell }) else { return }
+        receive([demoObservation(anchor: anchor, kind: .person, confidence: uncertain ? 0.3 : 0.94)])
+    }
+    func repeatDemoDelivery() {
+        guard let event = current?.events.last, event.source == .synthetic else { return }
+        receive([event])
+    }
+    func beginDepartureVerification() {
+        guard departureTask == nil, let incident = current, incident.status == .active,
+              incident.events.first?.source == .synthetic,
+              let anchor = incident.events.last(where: { $0.kind == .person || $0.kind == .motion || $0.kind == .doorbell }) else { return }
+        let id = incident.id; departureStartedAt = Date(); departureChecksRemaining = 10
+        receive([demoObservation(anchor: anchor, kind: .departed)])
+        departureTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10.1))
+            guard !Task.isCancelled, let self, self.current?.id == id, self.lifecycleActive else { return }
+            self.receive([self.demoObservation(anchor: anchor, kind: .departed)])
+            self.departureTask = nil; self.departureStartedAt = nil; self.departureChecksRemaining = 0
+        }
+    }
+    private func demoObservation(anchor: CameraEvent, kind: EventKind, confidence: Double = 0.94) -> CameraEvent {
+        .init(id: UUID().uuidString, accountID: anchor.accountID, deviceID: anchor.deviceID, componentID: anchor.componentID,
+              zone: anchor.zone, kind: kind, occurredAt: Date(), confidence: confidence, source: .synthetic)
+    }
+    private func cancelDepartureVerification() {
+        departureTask?.cancel(); departureTask = nil; departureStartedAt = nil; departureChecksRemaining = 0
+    }
     func findStop() async {
+        guard current?.requiresExplanation == false else { return }
         guard current?.state == .explained || current?.state == .stopRequested || current?.state == .navigating else { return }
         if current?.state == .explained { transition(.stopRequested) }
         else if current?.state == .navigating { transition(.stopRequested) }
@@ -166,18 +229,20 @@ import UserNotifications
     func simulateStandstill() { demoStationary = true; safety.invalidate(); tick() }
     func resumeDriving() { demoStationary = false; safety.invalidate(); tick() }
     func confirmParking() {
+        guard current?.requiresExplanation == false else { message = "Listen to the updated explanation before confirming parking."; return }
         guard current?.state == .stopRequested || current?.state == .navigating else { return }
         guard safety.confirmParked(now: Date()) else { message = "Parking is not yet verified. Wait for 20 seconds of reliable, continuous standstill."; return }
         verdict = safety.verdict(now: Date()); transition(.parkedConfirmed); transition(.videoUnlocked); tick()
     }
-    func review() async {
+    func review(event selectedEvent: CameraEvent? = nil) async {
         guard canReview, let incident = current else { message = verdict.reason; return }
+        let selectedKey = selectedEvent?.deduplicationKey
+        guard let event = selectedKey == nil ? incident.events.last(where: { $0.kind != .departed }) : incident.events.first(where: { $0.deduplicationKey == selectedKey }) else { return }
         let generation = clipGeneration
         if incident.events.first?.source == .synthetic {
             guard let url = Bundle.main.url(forResource: "demo-incident", withExtension: "mp4") else { message = "Synthetic demo clip is missing from the bundle."; return }
-            player = AVPlayer(url: url); showingVideo = true; player?.play(); return
+            reviewedEvent = event; player = AVPlayer(url: url); showingVideo = true; player?.play(); return
         }
-        guard let event = incident.events.last else { return }
         do {
             let api = try ringAPI()
             let bytes = try await api.clip(event: event, incident: incident, safety: safety.verdict(now: Date()))
@@ -185,19 +250,20 @@ import UserNotifications
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("ring-review.mp4")
             try bytes.write(to: url, options: .atomic)
             guard canReview else { try? FileManager.default.removeItem(at: url); return }
-            player = AVPlayer(url: url); showingVideo = true; player?.play()
+            reviewedEvent = event; player = AVPlayer(url: url); showingVideo = true; player?.play()
             runtimeStatus = "Official Ring API · MP4 retrieved at runtime"
         } catch { message = error.localizedDescription }
     }
     func closeVideo() {
         clipGeneration += 1; player?.pause(); player?.replaceCurrentItem(with: nil); player = nil; showingVideo = false
+        reviewedEvent = nil
         try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("ring-review.mp4"))
     }
     func connectRing(clientToken: String) async {
         let trimmed = clientToken.trimmingCharacters(in: .whitespacesAndNewlines)
         TokenVault.save(trimmed, key: "relay-token"); loadingRing = true; defer { loadingRing = false }
         stopPolling(); devices = []; ringAccountID = nil; connectedAPI = nil; connectedBackend = nil
-        closeVideo(); speech.cancel(); safety.invalidate(); tick()
+        closeVideo(); cancelExplanation(); cancelDepartureVerification(); safety.invalidate(); tick()
         do {
             guard let backend = URL(string: relayURL) else { throw RingAPIError.invalidOrigin }
             let api = try RingAPI(backend: backend, clientToken: trimmed)
@@ -205,7 +271,7 @@ import UserNotifications
             let proof = try await api.runtimeProof()
             // Re-linking can mean a different household. Never correlate across token sessions.
             if let current { history.insert(current, at: 0) }
-            current = nil; ledger = EventLedger(); duplicateCount = 0; closeVideo(); speech.cancel(); safety.invalidate()
+            current = nil; ledger = EventLedger(); duplicateCount = 0; closeVideo(); cancelExplanation(); safety.invalidate()
             ringAccountID = account; devices = found; connectedAPI = api; connectedBackend = backend
             runtimeStatus = "Official Ring via backend · \(devices.count) devices discovered"
             let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("runtime-proof.local.json")

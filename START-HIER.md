@@ -25,6 +25,21 @@ Bronnen: [Apple-account en lokaal testen](https://developer.apple.com/help/accou
 
 De app staat ook al op de lokale iPhone 17 Pro-simulator. Met een draaiende simulator kun je de meegeleverde build installeren en starten via `./scripts/run_demo.sh`.
 
+## Incidenttijdlijn en vervolgactiviteit
+
+Na stap 6 kun je **Incident timeline** openen. Camera-waarnemingen, beoordelingen en acties staan op tijdsvolgorde. Klap een camera-waarneming open voor de cameranaam, bron, tijdstip en **Review this camera moment** bij echte Ring-evidence. Bij de synthetische demo heet dit **Review illustrative demo clip**: het meegeleverde filmpje illustreert het scenario en is geen opname van dat specifieke event. De tijdlijn vergrendelt weer zodra de parkeerverificatie vervalt of de app naar de achtergrond gaat. Opgeslagen oudere incidenten houden hun metadata; video review gebruikt het huidige incident en zijn parkeerbeveiliging.
+
+Voor vervolggebeurtenissen open je **Demo & Ring → Update this synthetic incident**:
+
+1. Kies **Add continuing activity**. Het incidentnummer blijft gelijk; de tijdlijn groeit en de navigatiestap blijft behouden. **Urgent alert requests** blijft op één staan.
+2. Kies **Repeat the last delivery**. Het aantal waarnemingen groeit niet: deze levering is een duplicaat.
+3. Kies **Simulate two departure observations**. De demo voegt direct één vertrekwaarneming toe en na een echte wachttijd van tien seconden de tweede. Het incident wordt **Resolved**; de route en videobeveiliging blijven behouden.
+4. Kies **Simulate activity returning**. Hetzelfde incident wordt opnieuw actief en vraagt opnieuw om gesproken uitleg. Een heropende urgente waarschuwing heeft een wachttijd van 120 seconden sinds de vorige waarschuwing.
+
+Stilte, lage betrouwbaarheid of een verlopen tijdvenster sluiten een urgent incident niet af. Afsluiten vereist twee verschillende, voldoende betrouwbare vertrekwaarnemingen van de relevante camera/module, minstens tien seconden uit elkaar, na de laatste activiteit. Een urgente achterdeurmelding wordt niet afgesloten door vertrek bij de voordeur. **Resolved** betekent dat de waargenomen activiteit is geëindigd; het bevestigt niet dat het hele huis veilig is.
+
+De huidige Ring motion/doorbell-input levert geen expliciet vertrekbewijs. Automatisch afsluiten wordt daarom eerlijk met synthetische vertrekwaarnemingen gedemonstreerd. Echte Ring-incidenten blijven actief zolang dit bewijs ontbreekt; beeldanalyse is in deze uitbreiding niet toegevoegd.
+
 ## Echte Apple Maps
 
 Open **Demo & Ring** en zet **Offline stop-search rehearsal** uit. Zoek opnieuw een stopplek en kies **Navigate with Apple Maps**. Dit roept echt MapKit en Apple Maps aan. In de sensordemo krijgt Maps een expliciet gemarkeerd startpunt in Amsterdam; op een echte iPhone met sensormodus gebruikt Maps de huidige locatie.
@@ -49,4 +64,4 @@ Echte geauthenticeerde Ring-runtime is pas bewezen na een succesvolle test met j
 
 **Preview CarPlay flow** is een interactieve simulatie in de iPhone-app. De Live Activity/widget-extensie is echte iOS-code; we hebben de weergave op Apple's aparte CarPlay Simulator nog niet lokaal gevalideerd. Een interactieve volledige CarPlay-app vereist Apple-goedkeuring en provisioning. De code staat klaar achter `FULL_CARPLAY`; er is geen entitlement toegekend.
 
-De volledige architectuur, installatie, foutscenario's, teststatus, bronnen en het demoscript van 2:45 staan in [README.md](README.md) en [docs/VERIFICATION.md](docs/VERIFICATION.md).
+De volledige architectuur, installatie, foutscenario's, teststatus, bronnen en het demoscript van 2:55 staan in [README.md](README.md) en [docs/VERIFICATION.md](docs/VERIFICATION.md).

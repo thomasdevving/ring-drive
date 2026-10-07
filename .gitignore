@@ -9,6 +9,9 @@ xcuserdata/
 *.local.enc
 *.local.enc.tmp
 .secrets/
+*.pem
+*.key
+*.p12
 node_modules/
 runtime-proof.local.json
 *.log

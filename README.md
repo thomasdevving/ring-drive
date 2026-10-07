@@ -19,6 +19,18 @@ Requirements: macOS, Xcode 26 with the iOS 26 simulator, Python 3 for regenerati
 
 The Demo & Ring tab includes the passive package scenario, urgent rear-door scenario, duplicates, low confidence, stale evidence, no stop result, permission denial, Maps failure and uncertain parking. **Resume driving · revoke video** proves the lock returns.
 
+### Parked incident timeline and ongoing updates
+
+**Incident timeline** is a native chronological view of camera observations, immutable assessment snapshots with escalation reasons, and audited driver actions. It resolves the latest incident by ID rather than retaining a stale view snapshot. It is available only with fresh continuous standstill and explicit parking confirmation; motion, uncertainty and backgrounding replace the entire evidence surface with its lock. The driving screen shows a short summary and at most three recent observations.
+
+Expand an observation after parking to see camera name/module, source, timestamp, evidence score and event identifier. For the current incident, **Review this camera moment** requests its camera and timestamp through the existing guarded Ring MP4 path. Synthetic observations instead offer an explicitly illustrative bundled clip. Saved older incident timelines retain metadata; media review currently uses the current incident's authorization. No thumbnails, AI analysis or new Ring snapshot integration were added. Legacy saved incidents migrate to a clearly marked recovered assessment; unavailable historical decisions are not invented.
+
+Fresh events for one household update the same incident and append assessments without repeating urgent alerts or resetting an acknowledged explanation/navigation step. Official history and webhook observations can join; synthetic and real evidence cannot. An unresolved urgent episode survives a long gap rather than silently disappearing. Separate non-urgent or resolved episodes use a 180-second grouping gap. A material escalation or reopening requires a new spoken explanation and revokes any video authorization; an old speech completion cannot acknowledge a newer revision. A route already handed to Apple Maps is not automatically changed.
+
+Resolution requires two distinct `departed` observations with evidence score at least 0.8, from the latest active camera/module, after the latest activity and at least 10 seconds apart. Urgent rear-door episodes additionally require rear-camera evidence. New motion/person/doorbell evidence between checks, even uncertain evidence, blocks resolution. Silence and stale evidence never prove departure. Resolution removes the prior urgent notification and updates the Live Activity silently, without unlocking video or asserting that the home is safe. Fresh activity after departure reopens the same episode; a repeated urgent alert is allowed only on reopening after a 120-second cooldown. Alert counts record requests, not guaranteed system delivery or audible playback. All Live Activity updates are silent.
+
+The existing Ring motion/doorbell adapters do not manufacture departure annotations. Automatic resolution is demonstrated with labeled synthetic evidence until a future vision/review adapter supplies explicit observations; image analysis is outside this change. In **Demo & Ring → Update this synthetic incident**, exercise continuing activity, uncertain activity, duplicate delivery, two departure observations (real 10-second wait) and returning activity. Source changes, backgrounding and starting another scenario cancel the synthetic departure rehearsal.
+
 For the actual Apple Maps flow, switch off **Offline stop-search rehearsal** in Demo & Ring. The simulator searches real MapKit parking/service-station results near a disclosed synthetic Amsterdam starting point. Choose **Navigate with Apple Maps**. Search results are candidates, not a promise of availability, safe access or permission to park. Routes are owned by Apple Maps. Arrival never unlocks video.
 
 Open Apple Maps once and complete its first-use screens before recording a demo. These system onboarding screens can cover a successful navigation handoff; they are outside Ring Drive. The synthetic driver mode passes an explicit Amsterdam start point to Maps; physical-device mode uses Maps' current-location origin.
@@ -126,12 +138,14 @@ flowchart TD
 
 `Sources/RingDriveCore` has no UI dependency and includes the native backend transport. `iOS/App` owns services and effect orchestration. `iOS/Shared` defines ActivityKit payloads. `iOS/Widgets` presents system surfaces. `iOS/CarPlay` is compile-gated. `Relay` owns Ring credentials, server-to-server REST/OAuth refresh and signed inbound webhooks. `scripts` contains reproducible project/media generation, credential setup, safe packaging and genuine Ring connectivity verification.
 
+`Timeline.swift` provides stable chronological item identities and the shared parked-evidence guard. `IncidentUpdates.swift` holds inspectable episode, resolution and interruption policy. `Incident` persists every assessment's original evidence references, status, required explanation revision and alert cooldown alongside its existing transition audit.
+
 ```
 DETECTED → TRIAGED → NOTIFIED → EXPLAINED → STOP_REQUESTED
     → NAVIGATING → PARKED_CONFIRMED → VIDEO_UNLOCKED
 ```
 
-`EXPLAINED` requires completion of spoken audio; a canceled utterance cannot advance it. A failed Maps handoff stays in `STOP_REQUESTED`; retry is supported. A person already parked may skip navigation after requesting a stop. Motion, stale samples, app backgrounding or new evidence revoke video. New camera evidence requires a fresh explanation. No player or thumbnail is instantiated while locked; Picture in Picture is disabled; media access checks safety before the network request and again before presentation.
+`EXPLAINED` requires completion of spoken audio; a canceled utterance cannot advance it. A failed Maps handoff stays in `STOP_REQUESTED`; retry is supported. A person already parked may skip navigation after requesting a stop. Motion, stale samples, app backgrounding, escalation or reopened activity revoke video. Escalation and reopened activity require a fresh explanation; continued activity updates the same incident quietly. No player or thumbnail is instantiated while locked; Picture in Picture is disabled; media access checks safety before the network request and again before presentation.
 
 ### Inspectable triage
 
@@ -177,18 +191,19 @@ The app posts standard iPhone local notifications, not a fabricated WhatsApp-sty
 4. Validate the supported templates and interactions on Apple's CarPlay Simulator and real hardware. The scene currently provides voice explanation and safe-stop actions; video review remains on the parked iPhone.
 5. For real background events, add persistent backend event storage and APNs/ActivityKit push updates. Foreground polling and local notifications are sufficient for this demo, not reliable suspended-app delivery. A production account-link portal, multi-user credential storage, privacy policy and Ring Appstore certification are outside this MVP; single-account backend refresh is implemented when matching credentials are supplied.
 
-## Demo script — 2 minutes 45 seconds
+## Demo script — 2 minutes 55 seconds
 
 | Time | Show / say |
 |---|---|
 | 0:00–0:20 | Show an authenticated official Ring device discovery and event call/receipt, plus the official simulator event. “Ring supplies observations; Ring Drive decides what deserves the driver's attention.” If credentials are absent, this step is a blocker, not something to replace with a fake screenshot. |
-| 0:20–0:35 | Run Package delivered. Passive update, no audible interruption. Briefly show its rule reasons. |
+| 0:20–0:35 | Run Package delivered. Passive update, no audible interruption. Detailed rule reasons stay behind the parked timeline. |
 | 0:35–1:00 | Run Side entrance → rear door. Show the observation chain and video lock. Open the CarPlay simulation (clearly labeled) or show the actual small Live Activity separately. |
 | 1:00–1:25 | Tap Listen and hear the explanation. “It explains why without loading any video.” |
 | 1:25–1:45 | Find a stop. For the recorded rehearsal use the offline path; show real MapKit/Maps beforehand if connectivity is reliable. Do not call the rehearsal a real navigation session. |
 | 1:45–2:10 | Simulate arrival; show twenty seconds of continuous standstill and disabled parking confirmation. Then confirm safely parked. |
-| 2:10–2:30 | Review the clearly synthetic incident clip. For a Ring recording, use the actual API incident instead. |
-| 2:30–2:45 | Resume driving or background the app: video disappears and locks. Show audit transitions and duplicate suppression. |
+| 2:10–2:30 | Open Incident timeline. Expand Side entrance: camera, time, source and rule evidence. Deliberately review that moment; the bundled clip is explicitly illustrative. For actual footage use a Ring API incident. |
+| 2:30–2:50 | In Demo & Ring, append activity and repeat delivery: the same incident updates, with one alert request. Start departure verification and let both observations arrive ten real seconds apart; status becomes Resolved. |
+| 2:50–2:55 | Append returning activity: the same incident reopens. Resume driving or background the app to show evidence and video immediately relock. |
 
 ## Verification and blockers
 

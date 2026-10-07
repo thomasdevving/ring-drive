@@ -9,7 +9,7 @@ final class RingDriveUITests: XCTestCase {
     }
     func visible(_ id: String) -> XCUIElement {
         let element = app.buttons[id]
-        for _ in 0..<5 where !element.isHittable { app.swipeUp() }
+        for _ in 0..<12 where !element.isHittable { app.swipeUp() }
         XCTAssertTrue(element.isHittable, "Button not reachable: \(id)")
         return element
     }
@@ -24,6 +24,12 @@ final class RingDriveUITests: XCTestCase {
     func testEndToEndAudioStopParkReviewAndRelock() {
         screenshot("urgent-driving")
         XCTAssertFalse(app.buttons["reviewVideo"].exists)
+        visible("openTimeline").tap()
+        XCTAssertTrue(app.descendants(matching: .any)["timelineLocked"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["incidentTimeline"].exists)
+        screenshot("timeline-locked-driving")
+        app.navigationBars.buttons["Ring Drive"].tap()
+        for _ in 0..<5 where !app.buttons["listen"].isHittable { app.swipeDown() }
         explainAndFind()
         visible("navigate").tap()
         if app.alerts.firstMatch.waitForExistence(timeout: 3) { app.alerts.buttons["OK"].tap() }
@@ -35,12 +41,59 @@ final class RingDriveUITests: XCTestCase {
         confirm.tap()
         let review = visible("reviewVideo"); XCTAssertTrue(review.isEnabled)
         screenshot("parked-unlocked")
-        review.tap()
+        visible("openTimeline").tap()
+        XCTAssertTrue(app.descendants(matching: .any)["incidentTimeline"].waitForExistence(timeout: 5))
+        screenshot("parked-timeline-dark")
+        let side = app.descendants(matching: .any).matching(identifier: "observation-side").firstMatch
+        for _ in 0..<5 where !side.isHittable { app.swipeUp() }
+        XCTAssertTrue(side.isHittable); side.tap()
+        XCTAssertTrue(app.staticTexts["Demo side camera"].waitForExistence(timeout: 5))
+        screenshot("parked-camera-moment")
+        visible("reviewMoment-side").tap()
         XCTAssertTrue(app.navigationBars["Incident review"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["reviewedMoment"].label.contains("Side entrance"))
         screenshot("synthetic-video-review")
         XCUIDevice.shared.press(.home); app.activate()
-        XCTAssertTrue(app.navigationBars["Ring Drive"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["timelineLocked"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["incidentTimeline"].exists)
+        screenshot("timeline-relocked")
+        app.navigationBars.buttons["Ring Drive"].tap()
         XCTAssertFalse(app.buttons["reviewVideo"].exists, "Backgrounding invalidates motion evidence and closes video")
+    }
+    func testIncidentUpdatesResolveAndReopenWithoutRepeatedAlertsOrNavigationReset() {
+        explainAndFind()
+        visible("navigate").tap()
+        if app.alerts.firstMatch.waitForExistence(timeout: 3) { app.alerts.buttons["OK"].tap() }
+        XCTAssertTrue(app.staticTexts["driverProgress"].exists)
+        app.tabBars.buttons["Demo & Ring"].tap()
+        visible("appendActivity").tap()
+        let reference = app.staticTexts["incidentReference"].label
+        XCTAssertEqual(app.staticTexts["observationCount"].label, "Observations, 4")
+        XCTAssertEqual(app.staticTexts["alertRequestCount"].label, "Urgent alert requests, 1")
+        visible("repeatDelivery").tap()
+        XCTAssertEqual(app.staticTexts["observationCount"].label, "Observations, 4")
+        XCTAssertEqual(app.staticTexts["alertRequestCount"].label, "Urgent alert requests, 1")
+        screenshot("incident-updates-light")
+        visible("departureEvidence").tap()
+        let status = app.staticTexts["incidentStatus"]
+        let resolved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Status, Resolved'"), object: status)
+        XCTAssertEqual(XCTWaiter.wait(for: [resolved], timeout: 16), .completed)
+        XCTAssertEqual(app.staticTexts["incidentReference"].label, reference)
+        screenshot("incident-resolved-light")
+        app.tabBars.buttons["Drive"].tap()
+        XCTAssertTrue(app.staticTexts["Observed activity ended"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["driverProgress"].exists)
+        XCTAssertFalse(app.buttons["reviewVideo"].exists)
+        screenshot("resolved-driving")
+        app.tabBars.buttons["Demo & Ring"].tap()
+        visible("appendActivity").tap()
+        XCTAssertEqual(app.staticTexts["incidentStatus"].label, "Status, Active")
+        XCTAssertEqual(app.staticTexts["incidentReference"].label, reference)
+        XCTAssertEqual(app.staticTexts["alertRequestCount"].label, "Urgent alert requests, 1")
+        app.tabBars.buttons["Drive"].tap()
+        XCTAssertTrue(app.staticTexts["driverProgress"].exists)
+        XCTAssertFalse(app.buttons["findStop"].exists, "Reopened activity needs updated speech before new actions")
+        XCTAssertFalse(app.buttons["reviewVideo"].exists)
     }
     func testNoStopResultKeepsVideoLocked() {
         app.tabBars.buttons["Demo & Ring"].tap()
@@ -130,9 +183,8 @@ final class RingDriveUITests: XCTestCase {
         // Validate the persisted navigation transition rather than alert lifetime.
         if app.alerts.firstMatch.exists { app.alerts.buttons["OK"].tap() }
         XCTAssertFalse(app.buttons["reviewVideo"].exists)
-        visible("Why this alert?").tap()
-        let state = app.staticTexts["NAVIGATING"]
+        let state = app.staticTexts["driverProgress"]
         for _ in 0..<6 where !state.isHittable { app.swipeUp() }
-        XCTAssertTrue(state.isHittable, "Successful Maps handoff must enter the audited navigation state")
+        XCTAssertTrue(state.isHittable, "Successful Maps handoff must preserve navigation without opening the parked timeline")
     }
 }

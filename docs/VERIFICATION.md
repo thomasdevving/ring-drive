@@ -1,10 +1,10 @@
 # Verification record
 
-Environment: Apple Silicon Mac, Xcode 26.1 (17B55), Swift 6.2.1, iOS 26.1 Simulator (23B80), iPhone 17 Pro. Date: 5 October 2026.
+Environment: Apple Silicon Mac, Xcode 26.1 (17B55), Swift 6.2.1, iOS 26.1 Simulator (23B80), iPhone 17 Pro. Latest verification: 7 October 2026. Earlier runs are retained below.
 
 | Check | Result |
 |---|---|
-| Portable Swift core and native backend transport | 22 XCTest cases passed, 0 failures |
+| Portable Swift core, incident timeline/lifecycle and native backend transport | 41 XCTest cases passed, 0 failures |
 | Local Node backend, OAuth refresh, signed webhooks and encrypted token handoff | 10 tests passed, including HTTP integration, 0 failures |
 | Native app + Live Activity/widget extension | Built, installed and launched on the iPhone simulator |
 | Physical arm64 iPhone Release compilation | Passed: app and widget built for iPhoneOS, minimum iOS 26.0; unsigned, not installed |
@@ -14,6 +14,8 @@ Environment: Apple Silicon Mac, Xcode 26.1 (17B55), Swift 6.2.1, iOS 26.1 Simula
 | Online MapKit search + Apple Maps handoff | Passed; real search results, explicit Amsterdam demo origin, Apple Maps foreground launch, and audited NAVIGATING state |
 | Full CarPlay source with feature flag | SDK typecheck passed with FULL_CARPLAY; no entitlement or runtime support inferred |
 | Native backend connection form | Passed: rejects direct Ring API origin before network; captured actual native form |
+| Native continued incident → resolution → reopening | Passed: same incident reference, navigation preserved, duplicate suppressed, one urgent alert request |
+| Parked camera timeline → selected camera review → relock | Current targeted rerun pending; earlier failure exposed propagated DisclosureGroup test identifiers |
 | Remote token-input page | Chrome desktop/390px responsive browser check passed: WebCrypto envelope decrypted locally, original input cleared, no network requests or script errors |
 | Official authenticated Ring runtime | Pending: owner reports official simulator access; access token not yet received locally or as an encrypted envelope |
 | Live Activity on actual CarPlay Simulator | Not run: separate Apple CarPlay Simulator unavailable locally |
@@ -53,3 +55,13 @@ The documented backend startup command also passed a local smoke check with sepa
 ## Physical build readiness
 
 The remote-testing follow-up passed a Release build for `generic/platform=iOS`, SDK `iphoneos`, architecture `arm64`, with signing disabled. The generated app reports platform `iPhoneOS` and minimum iOS `26.0`; no signing resources are present. Both the app and widget compiled. This confirms device compilation, not installation, physical sensor validation or App Store distribution. There are no signing identities or configured development team on this Mac. The owner reports no paid Apple Developer account, so TestFlight distribution is currently unavailable. Free Personal Team testing through Xcode remains a local-Mac route. A reachable HTTPS backend is also required for real Ring calls from a remote phone.
+
+## Incident timeline and lifecycle extension
+
+The final core suite on 7 October passed **41 tests, 0 failures**; the backend suite passed **10 tests, 0 failures**. Nineteen added core tests cover chronological/stable timeline identities, original assessment snapshots, legacy decoding, fresh parked evidence, episode/account/source isolation, continued navigation, escalation acknowledgments, stale speech completion, explicit departure resolution, intervening activity, reopening and alert cooldowns. Silence, low confidence and an unrelated front-door departure cannot clear an urgent rear-door incident.
+
+The six-test native run `Test-RingDrive-2026.10.06_00-24-51-+0200.xcresult` passed five cases, including real MapKit/Maps, connection validation, passive/duplicate handling, no-stop safety and continued/resolved/reopened activity. Its remaining camera-review test reached the parked timeline and expanded the actual review control, then failed to locate the nested accessibility identifier. SwiftUI propagates a disclosure's identifier to descendants, so the test now selects the review action by its own spoken label and verifies the selected camera in the player. A rerun additionally exposed a cached simulator test runner; the current test binary was explicitly reinstalled. Native tests do not skip or shorten the twenty-second parking interval.
+
+The extension's physical arm64 app/widget Release build passed again, unsigned. The full CarPlay source passed SDK typechecking with `FULL_CARPLAY`; this remains compilation evidence only. A fresh native finish reviewer returned **ship** at the extension's supplied evidence scope, with no material fixes: `INCIDENT_EVIDENCE_REVIEW.md`. New timeline Dynamic Type and physical sensors remain unverified; the existing large-text capture checks the established Drive layout only.
+
+Official Ring departure detection is not implemented: resolution/reappearance are demonstrated with explicitly synthetic semantic observations. Current incidents support selected-camera media review; archived incidents expose parked metadata. Authenticated Ring runtime, real CarPlay presentation and Apple approval remain external validation steps.
