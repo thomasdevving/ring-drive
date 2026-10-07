@@ -48,3 +48,11 @@ No HTML/CSS detector ran because this is native iOS. No generated or approved co
 The supplied evidence is Simulator evidence for iPhone. Timeline Dynamic Type, hardware posture, gesture behavior, and hardware performance remain unverified. This check makes no claim that the pending native test rerun passed. Core and backend test results belong to the implementation validation record, not this visual comparison.
 
 Authenticated Ring runtime requires the owner's credentials. Departure markers in this extension are explicit synthetic observations; real motion/history adapters do not infer departure. CarPlay approval and certified vehicle gear evidence remain pending.
+
+## Scoped source recheck
+
+Rechecked the later `IncidentTimelineRow` changes in `iOS/App/Views.swift`: the observation accessibility identifier now belongs to the disclosure label, and the nested review button uses native `.buttonStyle(.borderless)` to permit independent interaction inside the list. The current-incident/video gate and 44-point action minimum remain in place. These changes preserve the incumbent control language; no palette, typography, spacing, layout or copy change was found in the scoped source recheck.
+
+The builder reports embedded origin metadata on all shipping rasters, with a scanner result of 16 rasters and zero missing provenance records; pixels are unchanged. The inspected captures therefore retain their visual-comparison scope. This source recheck does not establish a native test pass; the native test rerun remains pending at the time of this addition, with interaction semantics independently checked by the reviewer.
+
+Both design files were rehashed after the later source changes and retain the exact SHA-256 values above. Existing sidecar drift remains reported and unrepaired.

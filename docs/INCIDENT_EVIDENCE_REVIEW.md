@@ -40,3 +40,19 @@ None within the supplied visual and interaction scope.
 ## keep
 
 Keep the explicit evidence qualifications, quiet same-incident updates, preserved navigation and immediate parked-evidence/video lock; retain the native visual world while completing runtime validation.
+
+## Scoped semantics recheck
+
+Scope: the observation accessibility identifier moved from DisclosureGroup to its label, and the nested review button now uses the native borderless button style. Reviewed the current source for these changes only; the builder reports unchanged pixels in the original captures. No new visual review or test certification is implied.
+
+### verdict
+
+- Resolved: label-level observation identification keeps the parent disclosure's test identifier from propagating into its metadata and nested action. It changes identification rather than spoken copy, hierarchy or parking protection.
+- Resolved: the review action uses .buttonStyle(.borderless), retaining its explicit label, 44-point minimum height, current-incident check and model.canReview gate. This is an appropriate independent native List action and preserves deliberate review after disclosure.
+- No material regression identified in the two inspected semantics. Shipping-raster origin embedding was reported by the builder and does not affect these control semantics.
+
+### remaining
+
+Clear within this scoped recheck. The exact-label native query is still being tested; no all-native-tests-pass claim is made. The builder reports another successful physical-device Release build and FULL_CARPLAY typecheck with existing MapKit deprecation warnings. Original runtime and timeline Dynamic Type limitations remain.
+
+disposition: ship

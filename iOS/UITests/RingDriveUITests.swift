@@ -10,6 +10,10 @@ final class RingDriveUITests: XCTestCase {
     func visible(_ id: String) -> XCUIElement {
         let element = app.buttons[id]
         for _ in 0..<12 where !element.isHittable { app.swipeUp() }
+        if !element.isHittable {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "Synthetic demo accessibility: \(id)"; tree.lifetime = .keepAlways; add(tree)
+        }
         XCTAssertTrue(element.isHittable, "Button not reachable: \(id)")
         return element
     }
@@ -48,8 +52,16 @@ final class RingDriveUITests: XCTestCase {
         for _ in 0..<5 where !side.isHittable { app.swipeUp() }
         XCTAssertTrue(side.isHittable); side.tap()
         XCTAssertTrue(app.staticTexts["Demo side camera"].waitForExistence(timeout: 5))
+        let moment = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Review illustrative demo clip")).firstMatch
+        for _ in 0..<12 where !moment.isHittable { app.swipeUp() }
+        if !moment.isHittable {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "Synthetic camera review accessibility"; tree.lifetime = .keepAlways; add(tree)
+        }
+        XCTAssertTrue(moment.isHittable)
         screenshot("parked-camera-moment")
-        visible("reviewMoment-side").tap()
+        moment.tap()
         XCTAssertTrue(app.navigationBars["Incident review"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["reviewedMoment"].label.contains("Side entrance"))
         screenshot("synthetic-video-review")

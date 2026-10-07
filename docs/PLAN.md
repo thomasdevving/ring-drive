@@ -27,3 +27,5 @@ External validation remains: a successful authenticated Ring simulator/device ev
 6. Complete the native finish review/documentation handoffs, refresh the simulator build and exclude private configuration from the delivery ZIP.
 
 Scope: preserve the existing native design. No AI snapshot analysis, new cloud infrastructure, full CarPlay approval or automatic route cancellation is included.
+
+GitHub publication — 7 October 2026: native/core/backend sources, Xcode project, synthetic media, tests, design evidence and setup documentation are published to `thomasdevving/ring-drive` on `main`. Private environment files, token storage, keys, local receipts and build caches are excluded. Current extension verification: 41 Swift tests and 10 Node tests pass; five native cases pass, while the selected-camera end-to-end native case remains open. Final physical Release compilation and compile-gated CarPlay typechecking pass. Fresh native review and documentation comparison are complete; no entitlement or authenticated Ring runtime is claimed.
