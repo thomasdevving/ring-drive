@@ -121,3 +121,13 @@ Severity: **blocker** (cannot proceed without a workaround), **high** (feature d
 - **Severity:** medium
 - **Workaround:** SMS is dry-run unless `DRY_RUN` excludes `sms`; the in-app inbox is the primary household channel.
 - **Suggestion:** Show sandbox status and country requirements next to the SMS `Publish` error.
+
+## 2026-10-08 · Apple · Siri and App Intents in CarPlay cannot be verified here
+
+- **Task attempted:** Verify `ExplainLatestIncidentIntent`, `NotifyHouseholdIntent`, `CallContactIntent` and `FindSafeStopIntent` through Siri on the CarPlay Simulator.
+- **Steps taken:** Type-checked `iOS/App/Intents.swift` unchanged against the AppIntents framework in the macOS SDK (with a stub app model); unit-checked the shared logic.
+- **Expected:** Run the app on an iOS Simulator with its CarPlay window, or Apple's CarPlay Simulator, and invoke the App Shortcuts by voice.
+- **Actual:** No Xcode on this Mac, so no iOS build, simulator or Siri run. Apple's standalone CarPlay Simulator connects to a physical iPhone over USB, not to the iOS Simulator.
+- **Severity:** high (Phase 5 runtime behaviour unverified)
+- **Workaround:** Intents never open the app (`openAppWhenRun = false`), answer with spoken dialogs, and hand calls and Maps to the system with `OpenURLIntent`. A manual verification checklist is in the README.
+- **Suggestion:** Allow the iOS Simulator's CarPlay window to run Siri App Shortcuts, and document which `OpenURLIntent` targets CarPlay Siri accepts.

@@ -136,8 +136,9 @@ import UserNotifications
             if showingVideo || player != nil { closeVideo() }
         }
         if let current {
-            let key = "\(current.id)\(current.state)\(current.assessments.last?.id.uuidString ?? "")\(current.status)\(verdict.allowsVideo)"
-            if key != lastActivityState { lastActivityState = key; Task { await live.update(current, safety: verdict); activityStatus = live.status } }
+            let notifications = incidentNotifications
+            let key = "\(current.id)\(current.state)\(current.assessments.last?.id.uuidString ?? "")\(current.status)\(verdict.allowsVideo)\(current.requiresExplanation)\(ActivityText.outcome(notifications) ?? "")"
+            if key != lastActivityState { lastActivityState = key; Task { await live.update(current, safety: verdict, notifications: notifications); activityStatus = live.status } }
         }
         persist()
     }
@@ -219,17 +220,24 @@ import UserNotifications
         if choice == .dismiss { cancelExplanation(); stops = []; closeVideo(); tick() }
         if choice == .notifyHousehold { Task { await notifyHousehold(incidentID: incident.id) } }
     }
-    /// Messages household members who are not driving (never this iPhone's member).
-    @discardableResult func notifyHousehold(incidentID: UUID) async -> [HouseholdNotification] {
-        guard let api = household else { message = "Connect the household backend in Demo & Ring to notify others."; return [] }
+    /// Messages household members who are not driving (never this iPhone's member). Returns a spoken-style outcome.
+    @discardableResult func notifyHousehold(incidentID: UUID, announce: Bool = true) async -> String {
+        guard let api = household else {
+            let text = "The household backend is not connected, so no one was notified."
+            if announce { message = text }; return text
+        }
         do {
             let sent = try await api.notifyHousehold(incidentID: incidentID, requestedBy: memberContactID)
             let names = sent.map(\.contactName)
-            message = names.isEmpty ? "Everyone in the household appears to be driving, so no one was notified. You can call a contact instead."
-                : "Sent to \(ListFormatter.localizedString(byJoining: names))\(sent.contains { $0.status == "dry_run" } ? " (dry run)" : "")."
+            let text = names.isEmpty ? "Everyone in your household appears to be driving, so no one was notified. You can call a contact instead."
+                : "I've notified \(ListFormatter.localizedString(byJoining: names))\(sent.contains { $0.status == "dry_run" } ? " in dry-run mode" : "")."
+            if announce { message = text }
             await refreshIncidentNotifications()
-            return sent
-        } catch { message = "The household could not be notified. Check the backend connection."; return [] }
+            return text
+        } catch {
+            let text = "The household could not be notified. Check the backend connection."
+            if announce { message = text }; return text
+        }
     }
     /// CALL_CONTACT: records the choice, then hands the number to the system phone flow, which asks for confirmation.
     func call(_ contact: HouseholdContact) {
@@ -239,6 +247,66 @@ import UserNotifications
         if dryRunCalls { message = "Dry run: Ring Drive would now open the phone app to call \(contact.name). Turn off dry run in Household to place calls."; return }
         UIApplication.shared.open(url)
     }
+    // MARK: Siri (App Intents). These never open the app and never show video.
+
+    /// After a relaunch the last current incident is history[0]; Siri may continue it while it is still active.
+    func restoreLatestIfNeeded() {
+        guard current == nil, let latest = history.first, latest.status == .active, latest.state != .dismissed,
+              Date().timeIntervalSince(latest.audit.last?.at ?? .distantPast) < 2 * 3600 else { return }
+        current = history.removeFirst()
+    }
+    func incidentForSiri() async -> Incident? {
+        restoreLatestIfNeeded()
+        await pollHousehold()
+        return current
+    }
+    /// Reads the stored summary. Siri speaks it, which counts as hearing the explanation.
+    func siriExplain() async -> String {
+        guard let incident = await incidentForSiri() else { return "There is no recent home alert." }
+        let text = spokenText(for: incident)
+        if incident.requiresExplanation, current?.acknowledgeExplanation(revision: incident.explanationRevisionID, now: Date()) == true {
+            persist(); mirrorAudit()
+        }
+        let options = current?.availableChoices.filter { $0 != .dismiss }.map { $0.title.lowercased() } ?? []
+        return options.isEmpty ? text : "\(text) You can ask me to \(ListFormatter.localizedString(byJoining: options))."
+    }
+    private func recordSiriChoice(_ choice: DriverChoice, detail: String? = nil) throws {
+        guard var incident = current else { throw SiriMessage("There is no recent home alert.") }
+        guard !incident.requiresExplanation else { throw SiriMessage("Ask Ring Drive to explain the alert first.") }
+        guard incident.availableChoices.contains(choice) else { throw SiriMessage("That option isn't available for this alert.") }
+        try incident.choose(choice, now: Date(), detail: detail.map { "\($0) (Siri)" } ?? "Siri")
+        current = incident; persist(); mirrorAudit(); tick()
+    }
+    func siriNotifyHousehold() async throws -> String {
+        guard let incident = await incidentForSiri() else { throw SiriMessage("There is no recent home alert.") }
+        try recordSiriChoice(.notifyHousehold)
+        return await notifyHousehold(incidentID: incident.id, announce: false)
+    }
+    /// Returns the tel: link for the system call flow, which asks the user to confirm.
+    func siriCall(contactID: String) async throws -> URL {
+        _ = await incidentForSiri()
+        guard let contact = contacts.first(where: { $0.id == contactID }), let url = CallLink.url(for: contact.phone) else {
+            throw SiriMessage("I couldn't find a phone number for that contact.")
+        }
+        if current?.availableChoices.contains(.callContact) == true { try recordSiriChoice(.callContact, detail: contact.name) }
+        if dryRunCalls { throw SiriMessage("Dry run is on, so I won't call \(contact.name). Turn off dry-run calls in Ring Drive to place calls.") }
+        return url
+    }
+    /// Hands a parking search to Apple Maps. Arrival never unlocks video; parking is confirmed on the iPhone.
+    func siriFindStop() async throws -> URL {
+        _ = await incidentForSiri()
+        try recordSiriChoice(.findStop)
+        let origin = demoMode ? SafeStopSearch.demoOrigin : motion.latestLocation
+        var components = URLComponents(string: "https://maps.apple.com/")!
+        components.queryItems = [URLQueryItem(name: "q", value: "Parking")]
+            + (origin.map { [URLQueryItem(name: "sll", value: "\($0.coordinate.latitude),\($0.coordinate.longitude)")] } ?? [])
+        return components.url!
+    }
+    func callableContactsForSiri() async -> [HouseholdContact] {
+        if contacts.isEmpty, let api = household, let people = try? await api.contacts() { contacts = people }
+        return CallLink.callable(contacts)
+    }
+
     func acknowledge(_ notification: HouseholdNotification) async {
         guard let api = household else { return }
         do { try await api.acknowledge(notificationID: notification.id, contactID: memberContactID); await refreshInbox() }

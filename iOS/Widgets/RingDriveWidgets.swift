@@ -12,6 +12,9 @@ struct IncidentActivityView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(context.state.headline).font(.headline).lineLimit(family == .small ? 2 : 1)
                 Text(context.state.detail).font(.caption).lineLimit(2)
+                if let outcome = context.state.outcome {
+                    Label(outcome, systemImage: "person.2.fill").font(.caption).lineLimit(1)
+                }
                 if context.state.synthetic { Text("Simulated Ring event").font(.caption2).foregroundStyle(.secondary) }
             }
             if family != .small { Spacer(); Image(systemName: context.state.videoLocked ? "lock.fill" : "checkmark.shield") }
@@ -27,7 +30,10 @@ struct RingDriveLiveActivity: Widget {
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) { Image(systemName: "house.fill").foregroundStyle(.blue) }
                 DynamicIslandExpandedRegion(.trailing) { Image(systemName: "lock.fill") }
-                DynamicIslandExpandedRegion(.bottom) { Text(context.state.headline).font(.headline); Text(context.state.detail).font(.caption) }
+                DynamicIslandExpandedRegion(.bottom) {
+                    Text(context.state.headline).font(.headline); Text(context.state.detail).font(.caption)
+                    if let outcome = context.state.outcome { Text(outcome).font(.caption) }
+                }
             } compactLeading: { Image(systemName: context.state.urgent ? "exclamationmark.shield" : "house") }
             compactTrailing: { Image(systemName: "lock.fill") }
             minimal: { Image(systemName: "house.fill") }

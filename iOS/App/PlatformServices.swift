@@ -107,13 +107,16 @@ import RingDriveCore
 @MainActor final class LiveActivityPresenter {
     private var activity: Activity<DriveActivityAttributes>?
     var status = "Not started"
-    func update(_ incident: Incident, safety: SafetyVerdict) async {
+    func update(_ incident: Incident, safety: SafetyVerdict, notifications: [HouseholdNotification] = []) async {
+        let unlocked = VideoGuard.permits(incident: incident, safety: safety)
         let state = DriveActivityAttributes.ContentState(
-            headline: incident.status == .resolved ? "Observed activity ended" : (incident.decision.priority == .urgent ? "Activity at the rear door" : "Home update"),
-            detail: incident.status == .resolved ? "Departure evidence · route unchanged" : (incident.decision.priority == .passive ? "Delivered · no action needed" : (VideoGuard.permits(incident: incident, safety: safety) ? "Parked · review on iPhone" : "Video locked · stop safely")),
-            urgent: incident.status == .active && incident.decision.priority == .urgent,
-            videoLocked: !VideoGuard.permits(incident: incident, safety: safety),
-            synthetic: incident.events.first?.source == .synthetic)
+            headline: ActivityText.headline(incident),
+            detail: incident.status == .resolved ? "Departure evidence · route unchanged" : ActivityText.stage(incident, videoUnlocked: unlocked),
+            urgent: incident.status == .active && incident.decision.priority == .urgent && incident.state != .dismissed,
+            videoLocked: !unlocked,
+            synthetic: incident.isSimulated,
+            stage: ActivityText.stage(incident, videoUnlocked: unlocked),
+            outcome: ActivityText.outcome(notifications))
         let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(180))
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { status = "Live Activities disabled in Settings"; return }
         if activity?.attributes.incidentID != incident.id.uuidString {

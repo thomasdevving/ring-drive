@@ -207,6 +207,28 @@ node scripts/household.mjs driving <contact-id> yes      # simulated presence fo
 node scripts/household.mjs notifications <incident-id>
 ```
 
+### Hands-free choices with Siri (App Intents)
+
+The driver choices are App Intents with App Shortcuts (`iOS/App/Intents.swift`), so Siri can run them, including through CarPlay, without a CarPlay entitlement. They run in the app process without opening the app (`openAppWhenRun = false`) and never show video.
+
+| Intent | Example phrase | What it does |
+|---|---|---|
+| `ExplainLatestIncidentIntent` | "Explain my Ring Drive alert" | Siri speaks the stored summary (Bedrock or template). This counts as hearing the explanation, and Siri lists the next options. |
+| `NotifyHouseholdIntent` | "Notify my household with Ring Drive" | Records `NOTIFY_HOUSEHOLD`, messages household members who are not driving, and says who was reached. |
+| `CallContactIntent` (contact parameter) | "Call a contact with Ring Drive" | Siri asks which contact; records `CALL_CONTACT` and opens a `tel:` link with `OpenURLIntent`, where iOS asks for confirmation. With dry-run calls on, Siri says who would be called instead. |
+| `FindSafeStopIntent` | "Find a safe stop with Ring Drive" | Records `FIND_STOP` and hands a parking search near the current (or labeled demo) location to Apple Maps. Arrival never unlocks video. |
+
+Choices that the current incident does not offer, or that come before the explanation, are refused with a spoken reason. Each Siri choice is stored on the timeline with "(Siri)".
+
+The **Live Activity** (`iOS/Widgets`, also shown in CarPlay's small presentation on iOS 26) now shows the incident type, the current stage as the next spoken action ("Ask Siri: “Ring Drive explain”", "Next: notify household · call a contact", "Household notified", "Navigating to a stop · video locked") and the escalation outcome ("Notified Thomas", "Sanne has seen this", "Sanne is on the way"). All updates stay silent.
+
+**Verification status and limitations.** `Intents.swift` type-checks unchanged against the AppIntents SDK, and the shared logic is unit-checked, but no iOS build or Siri run was possible in this environment (no Xcode). Apple's CarPlay Simulator connects to a physical iPhone over USB. To verify:
+
+1. Install the app on an iPhone, open it once and set **Household → This iPhone belongs to**.
+2. Connect the iPhone to the CarPlay Simulator (or a car), trigger the 08:15 demo, and say "Hey Siri, explain my Ring Drive alert".
+3. Check that Siri speaks the summary, that "Notify my household with Ring Drive" reaches a member who is not driving, and that the Live Activity stage changes.
+4. Test "Call a contact" and "Find a safe stop" with dry-run calls off. Whether CarPlay Siri accepts `OpenURLIntent` for `tel:` and Maps links is not yet confirmed; Siri's built-in "Call Oma" and "Find parking" remain the fallback.
+
 ### Registered-app linking and documentation MCP
 
 For remote token delivery, `node scripts/create_token_input.mjs` creates a standalone `../Ring-token-invoer.html` containing only this workspace's public key. Download and open it locally in a current browser, paste the access token there and send only the `RINGDRIVE-TOKEN-BOX:` encrypted envelope back. The page uses WebCrypto RSA-OAEP SHA-256 to wrap a new AES-256-GCM key for each message; it has no imports, storage or network calls and a restrictive CSP. Its private key remains in ignored `Relay/.secrets/` with private permissions. `scripts/import_ring_token.mjs` imports an envelope from `Relay/.secrets/incoming.local.txt` without printing plaintext. This is a local demo handoff utility, not a deployed identity service. File-preview viewers may disable JavaScript; use a real browser on a computer when needed.
