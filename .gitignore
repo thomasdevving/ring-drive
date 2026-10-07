@@ -18,3 +18,4 @@ runtime-proof.local.json
 .DS_Store
 Build/
 Relay/data/
+mcp/data/

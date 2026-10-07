@@ -131,3 +131,13 @@ Severity: **blocker** (cannot proceed without a workaround), **high** (feature d
 - **Severity:** high (Phase 5 runtime behaviour unverified)
 - **Workaround:** Intents never open the app (`openAppWhenRun = false`), answer with spoken dialogs, and hand calls and Maps to the system with `OpenURLIntent`. A manual verification checklist is in the README.
 - **Suggestion:** Allow the iOS Simulator's CarPlay window to run Siri App Shortcuts, and document which `OpenURLIntent` targets CarPlay Siri accepts.
+
+## 2026-10-08 · Amazon · Alexa+ MCP add-ons need OAuth, not a static token
+
+- **Task attempted:** Connect a self-hosted Ring Drive MCP server (Streamable HTTP, protocol 2025-11-25) to Alexa+.
+- **Steps taken:** Built the server with `@modelcontextprotocol/sdk` 1.32.1 and a static bearer token; read the Alexa+ MCP toolkit authentication documentation.
+- **Expected:** Register a remote MCP URL with a bearer token, as most MCP clients allow.
+- **Actual:** Alexa+ requires an OAuth authorization server: `client_credentials` with scope `mcp:service` for initialize and tools/list (Tier 1), and `authorization_code` with PKCE S256 and scope `mcp:tools` for user data (Tier 2), tokens ≤ 3600 s, no refresh tokens for client credentials, `resource` validation, and responses under 500 ms. The documentation also conflicts with itself and with the MCP specification about `WWW-Authenticate` on 401 responses.
+- **Severity:** high
+- **Workaround:** Implemented a minimal single-household authorization server in `mcp/oauth.mjs` (RFC 8414 and RFC 9728 metadata, Tier 1 and Tier 2, owner consent page, rotating refresh tokens). The MCP endpoint keeps `WWW-Authenticate` with `resource_metadata` per the MCP specification; the token endpoint omits it. Publishing the add-on (Alexa AI CLI, privacy policy and terms URLs, public HTTPS) was not done here, so the Alexa+ connection itself is untested.
+- **Suggestion:** Offer a static-token or API-key option for private, single-household add-ons, and align the 401 guidance with the MCP specification.

@@ -229,6 +229,32 @@ The **Live Activity** (`iOS/Widgets`, also shown in CarPlay's small presentation
 3. Check that Siri speaks the summary, that "Notify my household with Ring Drive" reaches a member who is not driving, and that the Live Activity stage changes.
 4. Test "Call a contact" and "Find a safe stop" with dry-run calls off. Whether CarPlay Siri accepts `OpenURLIntent` for `tel:` and Maps links is not yet confirmed; Siri's built-in "Call Oma" and "Find parking" remain the fallback.
 
+### Alexa+ at home: Ring Drive MCP server
+
+`mcp/` is a separate, self-hosted [Model Context Protocol](https://modelcontextprotocol.io) server (Streamable HTTP, protocol `2025-11-25`, `@modelcontextprotocol/sdk`) so a household member at home can ask "Alexa, what happened while I was away?". It reads the backend only through its authenticated HTTP API, never changes the driver's incident state, and never exposes video.
+
+| Tool | What it returns or does |
+|---|---|
+| `get_recent_incidents` (`hours`, `limit`) | Incidents with their stored summary (the in-car video sentence removed), the driver's current step and who acknowledged them. Read-only. |
+| `get_incident_timeline` (`incident_id`) | Camera observations per camera, escalation steps, household acknowledgements and driver choices in time order. Read-only. |
+| `acknowledge_incident` (`incident_id`, optional `note`) | Records "seen at home" (`POST /incidents/{id}/acknowledge`), stops a running escalation, and is idempotent. |
+
+**Authentication.** Local MCP clients use a static bearer token (`MCP_TOKEN`). Alexa+ requires OAuth, so `mcp/oauth.mjs` provides a minimal single-household authorization server:
+- discovery metadata: `/.well-known/oauth-authorization-server` and `/.well-known/oauth-protected-resource`
+- Tier 1 `client_credentials` with scope `mcp:service`, which allows initialize and tools/list only
+- Tier 2 `authorization_code` with PKCE S256 with scope `mcp:tools`, after the household owner approves on `/authorize` with `MCP_OWNER_PASSWORD`
+- one-hour access tokens and rotating refresh tokens, stored hashed in Git-ignored `mcp/data/`
+
+Tool calls with a Tier 1 token get `403 insufficient_scope`. DNS-rebinding protection accepts only the configured hosts.
+
+```sh
+node scripts/setup_mcp.mjs                     # adds MCP_TOKEN, OAuth client secret and owner password to Relay/.env.local
+cd mcp && npm install && npm test
+cd mcp && node server.mjs                      # http://127.0.0.1:8790/mcp; needs the backend running
+```
+
+To connect Alexa+, expose the server over HTTPS (for example `cloudflared tunnel --url http://127.0.0.1:8790`), set `MCP_PUBLIC_URL` to that URL, add its host to `MCP_ALLOWED_HOSTS`, and register an add-on with the Alexa AI CLI. Give it the client ID and secret, and set `MCP_REDIRECT_URIS` to the redirect URIs Alexa+ shows. This last step was not performed here; see the friction log.
+
 ### Registered-app linking and documentation MCP
 
 For remote token delivery, `node scripts/create_token_input.mjs` creates a standalone `../Ring-token-invoer.html` containing only this workspace's public key. Download and open it locally in a current browser, paste the access token there and send only the `RINGDRIVE-TOKEN-BOX:` encrypted envelope back. The page uses WebCrypto RSA-OAEP SHA-256 to wrap a new AES-256-GCM key for each message; it has no imports, storage or network calls and a restrictive CSP. Its private key remains in ignored `Relay/.secrets/` with private permissions. `scripts/import_ring_token.mjs` imports an envelope from `Relay/.secrets/incoming.local.txt` without printing plaintext. This is a local demo handoff utility, not a deployed identity service. File-preview viewers may disable JavaScript; use a real browser on a computer when needed.

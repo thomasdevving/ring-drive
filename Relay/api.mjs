@@ -10,7 +10,7 @@ const routes = {
   summary:new RegExp(`^/incidents/${uuid}/summary$`), audit:new RegExp(`^/incidents/${uuid}/audit$`),
   notifyHousehold:new RegExp(`^/incidents/${uuid}/notify-household$`), incidentNotifications:new RegExp(`^/incidents/${uuid}/notifications$`),
   contact:new RegExp(`^/contacts/${uuid}$`), status:new RegExp(`^/members/${uuid}/status$`), inbox:new RegExp(`^/members/${uuid}/inbox$`),
-  ack:new RegExp(`^/notifications/${uuid}/ack$`)
+  ack:new RegExp(`^/notifications/${uuid}/ack$`), acknowledge:new RegExp(`^/incidents/${uuid}/acknowledge$`)
 };
 const SIMULATED_TYPES = new Set(['motion','motion.human','motion.vehicle','motion.animal','motion.other_motion','ding']);
 
@@ -84,6 +84,12 @@ export async function handleApi(req, res, url, {store, scheduler, incidents, esc
     if ((match = path.match(routes.ack)) && method === 'POST') {
       const result = await escalation.acknowledge(match[1], await body());
       return json(res, 200, {data:result.notification, alreadyAcknowledged:!!result.alreadyAcknowledged}), true;
+    }
+    if ((match = path.match(routes.acknowledge)) && method === 'POST') {
+      const {by = 'alexa', note} = await body();
+      if (!['alexa','household'].includes(by)) return json(res, 400, {error:'by must be alexa or household'}), true;
+      const result = await escalation.acknowledgeIncident(match[1], {by, note});
+      return json(res, 200, {data:incidents.present(result.incident), alreadyAcknowledged:!!result.alreadyAcknowledged}), true;
     }
     if ((match = path.match(routes.notifyHousehold)) && method === 'POST') {
       const {requestedBy} = await body();

@@ -88,6 +88,22 @@ export class Escalation {
     });
   }
 
+  /** Acknowledgement at home (Alexa): recorded and stops escalation; never changes the driver's state. */
+  acknowledgeIncident(incidentId, {by = 'alexa', note} = {}) {
+    return this.#serial(async () => {
+      const incident = this.store.incident(incidentId);
+      if (!incident) throw new IncidentError(404, 'Incident not found');
+      const label = by === 'alexa' ? 'Alexa (at home)' : 'Household';
+      if ((incident.acknowledgedBy ?? []).some(a => a.via === by)) return {incident, alreadyAcknowledged:true};
+      const updated = await this.store.updateIncident(incidentId, i => {
+        i.acknowledgedBy = [...(i.acknowledgedBy ?? []), {name:label, via:by, at:this.#at()}];
+        if (i.escalation?.status === 'running') i.escalation.status = 'acknowledged';
+        this.#audit(i, `Acknowledged via ${label}${note ? `: ${String(note).slice(0, 120)}` : ''}`, by === 'alexa' ? 'alexa' : 'household');
+      });
+      return {incident:updated};
+    });
+  }
+
   /** The driver's NOTIFY_HOUSEHOLD choice: message household members who are not driving (never the requester). */
   notifyHousehold(incidentId, {requestedBy} = {}) {
     return this.#serial(async () => {
