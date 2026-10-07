@@ -117,3 +117,17 @@ test('Rotated credentials are encrypted, authenticated, private and invalidated 
     bytes[30] ^= 1; await writeFile(path,bytes); await assert.rejects(store.load('seed'),/Cannot decrypt/);
   } finally { await rm(directory,{recursive:true,force:true}); }
 });
+
+test('History accepts only documented event filters and returns the pagination cursor link', async () => {
+  const calls = [];
+  const ring = new RingClient({accessToken:'ring-access-secret', fetchImpl:async url => {
+    calls.push(url);
+    if (url.endsWith('/users/me')) return json(profile);
+    if (url.endsWith('/devices')) return json(devices);
+    return json({data:[{id:'e',attributes:{event_type:'motion',start:1,end:2}}], links:{next:'/v1/history/devices/camera/events?event_types=motion&page[key]=abc'}});
+  }});
+  const page = await ring.history('camera', null, 'motion');
+  assert.equal(new URL(calls.at(-1)).searchParams.get('event_types'), 'motion');
+  assert.equal(page.links.next, '/v1/history/devices/camera/events?event_types=motion&page[key]=abc');
+  await assert.rejects(ring.history('camera', null, 'motion,doorbell'), error => error.status === 400);
+});

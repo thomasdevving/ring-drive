@@ -2,13 +2,19 @@ import http from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { RingClient, RingError, EncryptedTokenStore, RING_ORIGIN } from './ring-client.mjs';
+import { Store } from './store.mjs';
+import { AbsenceScheduler } from './scheduler.mjs';
+import { handleApi } from './api.mjs';
+
+const API_PREFIXES = ['/rules', '/incidents', '/simulate'];
 
 export function verifySignature(key, raw, received = '') {
   const hex = received.replace(/^sha256=/, '');
   if (!key || !/^[a-fA-F0-9]{64}$/.test(hex)) return false;
   return timingSafeEqual(createHmac('sha256', key).update(raw).digest(), Buffer.from(hex, 'hex'));
 }
-export function createRelay({ signingKey, clientToken, expectedAccount, ring, now = () => Date.now() }) {
+export function createRelay({ signingKey, clientToken, expectedAccount, ring, now = () => Date.now(), store = new Store(null, now),
+  scheduler = new AbsenceScheduler({store, ring, now}), simulation = false }) {
   if (!clientToken) throw new Error('Configure RELAY_CLIENT_TOKEN using scripts/setup_ring.mjs.');
   const queue = [], seen = new Map(), calls = [];
   function json(res, code, body) { res.writeHead(code, {'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(body)); }
@@ -67,6 +73,14 @@ export function createRelay({ signingKey, clientToken, expectedAccount, ring, no
       // Retain bounded events; client deduplicates. An interrupted fetch cannot lose a delivery.
       return json(res, 200, {events:queue.filter(e => now() - e.data.attributes.timestamp <= 180000)});
     }
+    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+    if (API_PREFIXES.some(prefix => path === prefix || path.startsWith(prefix + '/'))) {
+      if (!authorised(req)) return json(res, 401, {error:'Client token required'});
+      try {
+        if (await handleApi(req, res, new URL(req.url, 'http://localhost'), {store, scheduler, simulation, now, json, readBody})) return;
+      } catch (error) { return json(res, error instanceof RingError ? error.status : 500, {error:'Request failed'}); }
+      return json(res, 404, {error:'Not found'});
+    }
     if (req.method !== 'POST' || req.url !== '/webhooks/ring') return json(res, 404, {error:'Not found'});
     try {
       const account = expectedAccount || ring?.accountID;
@@ -88,6 +102,10 @@ export function createRelay({ signingKey, clientToken, expectedAccount, ring, no
       // Allow-list fields so credential lifecycle payloads cannot leak to clients.
       queue.push({meta:{request_id:event.meta.request_id,account_id:event.meta.account_id},data:{id:event.data.id,type:event.data.type,attributes:{source:a.source,timestamp:a.timestamp,sub_type:a.sub_type,component_ids:a.component_ids}}});
       if (queue.length > 1000) queue.shift();
+      // Positive evidence for absence rules. Storage failure must not turn into a Ring redelivery loop.
+      await store.addObservation({id:key, deviceId:a.source, startMs:a.timestamp, source:'ringWebhook', simulated:false,
+        eventType:event.data.type === 'button_press' ? 'ding' : (a.sub_type && a.sub_type !== 'motion' ? `motion.${a.sub_type}` : 'motion'),
+        ...(Array.isArray(a.component_ids) ? {componentIds:a.component_ids.filter(c => typeof c === 'string').slice(0,8)} : {})}).catch(() => {});
       json(res, 200, {accepted:true});
     } catch (error) { json(res, error instanceof RingError ? error.status : 400, {error:'Malformed JSON or delivery'}); }
   });
@@ -95,7 +113,13 @@ export function createRelay({ signingKey, clientToken, expectedAccount, ring, no
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const store = process.env.TOKEN_STORE_KEY ? new EncryptedTokenStore(new URL('./tokens.local.enc',import.meta.url).pathname,process.env.TOKEN_STORE_KEY) : undefined;
   const ring = new RingClient({accessToken:process.env.RING_ACCESS_TOKEN,refreshToken:process.env.RING_REFRESH_TOKEN,clientID:process.env.RING_CLIENT_ID,clientSecret:process.env.RING_CLIENT_SECRET,expectedAccount:process.env.RING_ACCOUNT_ID,store});
-  const server = createRelay({signingKey:process.env.RING_HMAC_KEY, clientToken:process.env.RELAY_CLIENT_TOKEN, expectedAccount:process.env.RING_ACCOUNT_ID,ring});
+  const household = await Store.open(process.env.DATA_FILE || new URL('./data/household.local.json',import.meta.url).pathname);
+  const scheduler = new AbsenceScheduler({store:household, ring:process.env.RING_ACCESS_TOKEN ? ring : null, log:message => console.log(message)});
+  const server = createRelay({signingKey:process.env.RING_HMAC_KEY, clientToken:process.env.RELAY_CLIENT_TOKEN, expectedAccount:process.env.RING_ACCOUNT_ID,ring,
+    store:household, scheduler, simulation:process.env.SIMULATION_ENABLED === '1'});
   const port = Number(process.env.PORT ?? 8787);
-  server.listen(port, '127.0.0.1', () => console.log(`Ring Drive backend on http://127.0.0.1:${port}; Ring credentials stay on this backend.`));
+  server.listen(port, '127.0.0.1', () => {
+    scheduler.start();
+    console.log(`Ring Drive backend on http://127.0.0.1:${port}; Ring credentials stay on this backend. Absence rules: ${household.rules().length}.`);
+  });
 }

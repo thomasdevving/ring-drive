@@ -3,6 +3,8 @@ import {readFile, writeFile, rename} from 'node:fs/promises';
 
 export const RING_ORIGIN = 'https://api.amazonvision.com';
 export const OAUTH_URL = 'https://oauth.ring.com/oauth/token';
+// Documented Event History filters.
+export const HISTORY_EVENT_TYPES = new Set(['motion','motion.human','motion.vehicle','motion.animal','motion.other_motion','on_demand','ding']);
 export class RingError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -106,13 +108,16 @@ export class RingClient {
     if (this.devicesAt === null || this.now() - this.devicesAt > 60000) await this.devices();
     if (!this.deviceIDs.has(id)) throw new RingError(403, 'Device is not in the consented Ring device list.');
   }
-  async history(id, cursor) {
+  async history(id, cursor, eventTypes = 'motion.human,ding') {
+    if (!eventTypes.split(',').every(t => HISTORY_EVENT_TYPES.has(t))) throw new RingError(400, 'Unsupported event type filter.');
     await this.requireDevice(id);
-    const query = new URLSearchParams({event_types:'motion.human,ding'});
+    const query = new URLSearchParams({event_types:eventTypes});
     if (cursor) { if (cursor.length > 512) throw new RingError(400, 'Invalid event cursor.'); query.set('page[key]',cursor); }
     const body = await (await this.request(`/v1/history/devices/${encodeURIComponent(id)}/events?${query}`)).json();
     if (!Array.isArray(body.data)) throw new RingError(502, 'Invalid Ring event history.');
-    return {data:body.data.map(e => ({id:e.id,type:e.type,attributes:{event_type:e.attributes?.event_type,start:e.attributes?.start,end:e.attributes?.end}}))};
+    const next = typeof body.links?.next === 'string' && body.links.next.length <= 2048 ? body.links.next : undefined;
+    return {data:body.data.map(e => ({id:e.id,type:e.type,attributes:{event_type:e.attributes?.event_type,start:e.attributes?.start,end:e.attributes?.end}})),
+      ...(next ? {links:{next}} : {})};
   }
   async clip(id, body) {
     await this.requireDevice(id);

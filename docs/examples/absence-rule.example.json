@@ -1,0 +1,15 @@
+{
+  "name": "School run",
+  "personLabel": "Child",
+  "daysOfWeek": ["mon", "tue", "wed", "thu", "fri"],
+  "window": { "start": "07:30", "end": "08:15" },
+  "timeZone": "Europe/Amsterdam",
+  "exitCameras": [
+    { "deviceId": "REPLACE_WITH_FRONT_DOOR_DEVICE_ID", "label": "front door" },
+    { "deviceId": "REPLACE_WITH_SIDE_GATE_DEVICE_ID", "label": "side gate" },
+    { "deviceId": "REPLACE_WITH_BACK_DOOR_DEVICE_ID", "label": "back door" }
+  ],
+  "expectedEventType": "motion.human",
+  "graceSeconds": 120,
+  "evidenceSource": "ring"
+}

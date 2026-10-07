@@ -17,3 +17,4 @@ runtime-proof.local.json
 *.log
 .DS_Store
 Build/
+Relay/data/

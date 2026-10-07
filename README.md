@@ -99,6 +99,28 @@ node --env-file=.env.local server.mjs
 
 Connect the backend account first; unsigned, unsupported, stale or wrong-account deliveries are never promoted to incidents. Official event types are `motion_detected` and `button_press`. Configure your registered Ring app to deliver to an HTTPS tunnel's `/webhooks/ring`. Expose only that path for the webhook demo. `/events`, `/ring/*` and runtime receipts require the separate client key. Use **Fetch signed Ring events** on the same verified native connection. Real phones need an HTTPS backend accessible from the phone. Exposing a backend or registering a webhook is a separate deployment/configuration step, not performed here.
 
+### Absence rules ("expected activity")
+
+An absence rule fires when something expected does **not** happen. Example: on school days, someone is normally seen at an exit between 07:30 and 08:15. Rules run on the backend, so they work while the phone is asleep.
+
+- **Rule fields:** `name`, `personLabel`, `daysOfWeek`, `window` (`HH:MM`–`HH:MM`, same day), `timeZone` (IANA), `exitCameras` (every exit, each with a Ring `deviceId` and a spoken `label`), `expectedEventType` (`motion.human`, or `motion` for cameras without Ring Smart Alerts), `graceSeconds` (default 120) and `evidenceSource` (`ring` or `simulated`). See `docs/examples/absence-rule.example.json`.
+- **Evaluation:** after `window.end + graceSeconds`, the backend reads `GET /v1/history/devices/{id}/events?event_types=<expected>` for **every** exit camera back to the window start, following `links.next`. Any overlapping observation at any exit camera satisfies the rule. Signed webhook observations count as positive evidence too.
+- **Fail closed:** if any camera's history cannot be read (expired Playground token, Ring error, too many pages), the window is recorded as `unchecked`, retried every 5 minutes up to 6 times, and **never** turned into an absence alert.
+- **What Ring can and cannot tell us:** Ring reports person/motion observations per camera with timestamps. It does not identify people or the direction of movement. The `personLabel` is therefore used only for wording and, later, routing. Alerts state only what the cameras did not record, e.g. *"School run: No person was detected at the front door, the side gate or the back door between 07:30 and 08:15. The cameras cannot show where anyone is."*
+- **Output:** an `ABSENCE` incident (`GET /incidents`) with a stored spoken summary, and one run per rule window (`GET /rules/{id}/runs`).
+
+Backend routes (all require the `RELAY_CLIENT_TOKEN` bearer): `GET/POST /rules`, `GET/PUT/DELETE /rules/{id}`, `GET /rules/{id}/runs`, `POST /rules/{id}/evaluate` (`{"date":"YYYY-MM-DD"}`, ended windows only), `GET /incidents`, `GET /incidents/{id}`, and `POST /simulate/observations` (only with `SIMULATION_ENABLED=1`; simulated evidence never satisfies a `ring` rule and simulated incidents are labeled). Data is stored in Git-ignored `Relay/data/household.local.json` (mode 600).
+
+```sh
+cd Relay && node --env-file=.env.local server.mjs     # terminal 1
+node scripts/rules.mjs add docs/examples/absence-rule.example.json
+node scripts/rules.mjs list
+node scripts/rules.mjs evaluate <rule-id> 2026-10-07   # check an ended window now
+node scripts/rules.mjs incidents
+```
+
+A native rules screen is not included yet; rules are managed through this API.
+
 ### Registered-app linking and documentation MCP
 
 For remote token delivery, `node scripts/create_token_input.mjs` creates a standalone `../Ring-token-invoer.html` containing only this workspace's public key. Download and open it locally in a current browser, paste the access token there and send only the `RINGDRIVE-TOKEN-BOX:` encrypted envelope back. The page uses WebCrypto RSA-OAEP SHA-256 to wrap a new AES-256-GCM key for each message; it has no imports, storage or network calls and a restrictive CSP. Its private key remains in ignored `Relay/.secrets/` with private permissions. `scripts/import_ring_token.mjs` imports an envelope from `Relay/.secrets/incoming.local.txt` without printing plaintext. This is a local demo handoff utility, not a deployed identity service. File-preview viewers may disable JavaScript; use a real browser on a computer when needed.
