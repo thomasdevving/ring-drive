@@ -260,8 +260,22 @@ struct IncidentTimelineView: View {
                 Text(incident.decision.explanation)
                 LabeledContent("Incident status", value: incident.status.rawValue.capitalized)
                 LabeledContent("Priority", value: incident.decision.priority.rawValue.capitalized)
-                LabeledContent("Rule confidence", value: "\(Int(incident.decision.confidence * 100))%")
-                Text("A rule score, not a calibrated probability. Camera correlation does not verify a person's identity.").font(.footnote).foregroundStyle(.secondary)
+                if incident.kind == .camera {
+                    LabeledContent("Rule confidence", value: "\(Int(incident.decision.confidence * 100))%")
+                    Text("A rule score, not a calibrated probability. Camera correlation does not verify a person's identity.").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Text("Exit cameras recorded no qualifying observation in the rule window. Cameras do not identify people or the direction of movement.").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            if !incident.events.isEmpty {
+                Section("Per-camera timeline") {
+                    ForEach(incident.cameraSegments) { segment in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(segment.zone.locationLabel) · \(model.cameraName(for: segment.events[0]))").font(.subheadline.weight(.semibold))
+                            Text(segmentDetail(segment)).font(.footnote).foregroundStyle(.secondary)
+                        }.padding(.vertical, 4).accessibilityElement(children: .combine).accessibilityIdentifier("segment-\(segment.zone.rawValue)")
+                    }
+                }
             }
             Section {
                 ForEach(incident.timeline) { item in
@@ -274,6 +288,11 @@ struct IncidentTimelineView: View {
                 Text(incident.id.uuidString).font(.caption.monospaced()).textSelection(.enabled)
             }
         }.accessibilityIdentifier("incidentTimeline")
+    }
+    private func segmentDetail(_ segment: CameraSegment) -> String {
+        let start = segment.first.formatted(date: .omitted, time: .standard)
+        guard segment.events.count > 1 else { return "\(segment.kind.observationLabel) at \(start)" }
+        return "\(segment.kind.observationLabel) from \(start) to \(segment.last.formatted(date: .omitted, time: .standard)) · \(segment.seconds) s · \(segment.events.count) observations"
     }
 }
 

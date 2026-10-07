@@ -39,7 +39,7 @@ export function checkEntry(incident, entry, now) {
   }
   const note = typeof entry.note === 'string' ? entry.note.slice(0, 200) : (entry.choice ? `Driver chose ${entry.choice}` : 'Transition accepted');
   return {id:typeof entry.id === 'string' ? entry.id.slice(0, 64) : undefined, at:new Date(at).toISOString(), state:entry.state, note,
-    ...(entry.choice ? {choice:entry.choice} : {}), source:['driver-app','siri','backend','household'].includes(entry.source) ? entry.source : 'driver-app'};
+    ...(entry.choice ? {choice:entry.choice} : {}), source:['driver-app','siri','backend','household','rehearsal'].includes(entry.source) ? entry.source : 'driver-app'};
 }
 
 /** Applies entries in order, skipping ids already recorded. Returns the number of new entries. */

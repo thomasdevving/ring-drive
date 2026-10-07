@@ -71,3 +71,29 @@ public enum ParkedReviewGuard {
         safety.allowsVideo && safety.state == .parked && safety.isFresh(at: now)
     }
 }
+
+/// Consecutive observations from the same camera (and module) of the same kind, for the per-camera timeline.
+public struct CameraSegment: Equatable, Identifiable, Sendable {
+    public let events: [CameraEvent]
+    public var id: String { events[0].deduplicationKey }
+    public var deviceID: String { events[0].deviceID }
+    public var componentID: String? { events[0].componentID }
+    public var zone: Zone { events[0].zone }
+    public var kind: EventKind { events[0].kind }
+    public var first: Date { events[0].occurredAt }
+    public var last: Date { events[events.count - 1].occurredAt }
+    /// Span between the first and last observation in this segment, in whole seconds.
+    public var seconds: Int { Int(last.timeIntervalSince(first).rounded()) }
+}
+
+public extension Incident {
+    var cameraSegments: [CameraSegment] {
+        var segments: [[CameraEvent]] = []
+        for event in events.sorted(by: { $0.occurredAt < $1.occurredAt }) {
+            if let last = segments.last?.last, last.deviceID == event.deviceID, last.componentID == event.componentID, last.kind == event.kind {
+                segments[segments.count - 1].append(event)
+            } else { segments.append([event]) }
+        }
+        return segments.map(CameraSegment.init(events:))
+    }
+}

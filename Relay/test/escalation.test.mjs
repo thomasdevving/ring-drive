@@ -26,6 +26,8 @@ async function absenceIncident(store, extra = {}) {
 
 test('Contacts and ladders are validated', () => {
   assert.deepEqual(validateContact({name:'Thomas', role:'household'}), {name:'Thomas', role:'household', priority:5, channel:'app'});
+  assert.equal(validateContact({name:'Thomas', role:'household', simulated:true}).simulated, true, 'demo seed data is flagged');
+  assert.equal(validateContact({name:'Thomas', role:'household', simulated:'yes'}).simulated, undefined);
   for (const bad of [{name:'x', role:'boss'}, {name:'', role:'household'}, {name:'x', role:'household', channel:'sms'}, {name:'x', role:'household', phone:'0612'},
     {name:'x', role:'household', priority:0}, {name:'x', role:'household', channel:'fax'}]) assert.throws(() => validateContact(bad), ContactError, JSON.stringify(bad));
   assert.deepEqual(validateLadder([{target:'monitored', message:'School starts in 15 minutes'}, {target:'driver', afterSeconds:120}]),

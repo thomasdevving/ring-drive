@@ -333,6 +333,37 @@ The app posts standard iPhone local notifications, not a fabricated WhatsApp-sty
 4. Validate the supported templates and interactions on Apple's CarPlay Simulator and real hardware. The scene currently provides voice explanation and safe-stop actions; video review remains on the parked iPhone.
 5. For real background events, add persistent backend event storage and APNs/ActivityKit push updates. Foreground polling and local notifications are sufficient for this demo, not reliable suspended-app delivery. A production account-link portal, multi-user credential storage, privacy policy and Ring Appstore certification are outside this MVP; single-account backend refresh is implemented when matching credentials are supplied.
 
+## Demo scenarios (one command each)
+
+Both scenarios use seed data that is flagged `simulated` and labeled as such in every surface (rule name "School run (simulated)", contacts marked Simulated, Live Activity "Simulated Ring event", timeline sources). The script starts the backend with `SIMULATION_ENABLED=1` if it is not already running. Remove the seed data with `npm --prefix Relay run demo:reset`.
+
+### 1. "08:15": child not seen leaving
+
+```sh
+npm --prefix Relay run demo:0815          # phone flow: the driver iPhone does steps 3-4
+npm --prefix Relay run demo:0815:auto     # headless rehearsal of the same flow (source "rehearsal")
+```
+
+1. The script seeds a simulated household (Sanne monitored, Thomas at home and not driving, Lisa driving with the driver iPhone, Oma as emergency contact) and the rule "School run (simulated)", 07:30-08:15, exits front door, side gate and back door. Its ladder is: push to Sanne "School starts in 15 minutes", then the driver after 20 seconds (`--wait SECONDS`).
+2. It evaluates the most recent ended 07:30-08:15 window. With no simulated observation, the absence incident is created and its summary stored (Bedrock, or the template).
+3. Sanne does not acknowledge, so the driver is alerted. The driver iPhone (Household → This iPhone belongs to: Lisa) adopts the incident within 15 seconds, notifies, and updates the Live Activity, which CarPlay shows.
+4. The driver says "Hey Siri, explain my Ring Drive alert", then "Hey Siri, notify my household with Ring Drive". Thomas is reached because he is not driving; Lisa never is. Thomas taps "I've seen this", and the Live Activity shows "Thomas has seen this".
+
+The script prints each step and the backend timeline.
+
+### 2. Multi-camera: side camera, then the back door for 85 seconds
+
+```sh
+npm --prefix Relay run demo:multicam             # starts the in-app scenario and follows it on the backend
+npm --prefix Relay run demo:multicam:backend     # no simulator: posts the same observations to show summary + timeline
+```
+
+1. The labeled in-app scenario "Side camera → back door for 85 s" starts (deep link `ringdrive://demo/multicam`, opened automatically when an iOS Simulator is booted). On-device triage rates it urgent; the incident is synced and its summary stored.
+2. Driver alert → **Listen to explanation** (or Siri) → **Find a safe place to stop** → **Simulate arrival & standstill** (real 20-second check) → **I'm safely parked** → video unlocked.
+3. **Incident timeline** shows the per-camera timeline (side entrance once; rear door 85 s, 3 observations), every observation, assessment and driver choice; **Review incident video** plays the bundled, explicitly illustrative clip.
+
+The script prints the stored summary, each transition as the phone reports it, and the per-camera timeline.
+
 ## Demo script — 2 minutes 55 seconds
 
 | Time | Show / say |

@@ -10,8 +10,11 @@ public struct HouseholdContact: Codable, Equatable, Identifiable, Sendable {
     public let phone: String?
     /// "driving", "not-driving" or "unknown", reported by that member's own app.
     public let drivingState: String?
-    public init(id: String, name: String, role: Role, priority: Int, channel: String, phone: String?, drivingState: String?) {
-        self.id = id; self.name = name; self.role = role; self.priority = priority; self.channel = channel; self.phone = phone; self.drivingState = drivingState
+    /// Demo seed data is flagged and labeled as simulated.
+    public let simulated: Bool?
+    public init(id: String, name: String, role: Role, priority: Int, channel: String, phone: String?, drivingState: String?, simulated: Bool? = nil) {
+        self.id = id; self.name = name; self.role = role; self.priority = priority; self.channel = channel; self.phone = phone
+        self.drivingState = drivingState; self.simulated = simulated
     }
 }
 

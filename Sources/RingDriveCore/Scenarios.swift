@@ -1,12 +1,13 @@
 import Foundation
 
 public enum DemoScenario: String, CaseIterable, Identifiable, Sendable {
-    case package, rearDoor, lowConfidence, stale, duplicates
+    case package, rearDoor, multiCamera, lowConfidence, stale, duplicates
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .package: "Package delivered"
         case .rearDoor: "Side entrance → rear door"
+        case .multiCamera: "Side camera → back door for 85 s"
         case .lowConfidence: "Low-confidence evidence"
         case .stale: "Stale evidence"
         case .duplicates: "Duplicate Ring deliveries"
@@ -21,6 +22,8 @@ public enum DemoScenario: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .package: return [e(1, .front, .person, -24), e(2, .front, .package, -12), e(3, .front, .departed, -3)]
         case .rearDoor: return [e(1, .side, .person, -100), e(2, .rear, .person, -80), e(3, .rear, .person, -2)]
+        // Demo scenario 2: a person at the side camera, then repeated observations at the back door spanning 85 seconds.
+        case .multiCamera: return [e(1, .side, .person, -100), e(2, .rear, .person, -86), e(3, .rear, .person, -45), e(4, .rear, .person, -1)]
         case .lowConfidence: return [e(1, .side, .person, -100, 0.4), e(2, .rear, .person, -80, 0.45), e(3, .rear, .person, -2, 0.35)]
         case .stale: return [e(1, .side, .person, -600), e(2, .rear, .person, -580), e(3, .rear, .person, -480)]
         case .duplicates:

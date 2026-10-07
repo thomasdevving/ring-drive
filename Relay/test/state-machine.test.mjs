@@ -30,6 +30,8 @@ test('Absence incidents follow the table strictly and never enter the stop or vi
   assert.equal(state, 'CONTACT_CALLED');
   assert.deepEqual(accepted.map(e => [e.state, e.choice, e.source]), [['EXPLAINED',undefined,'driver-app'],['HOUSEHOLD_NOTIFIED','NOTIFY_HOUSEHOLD','siri'],['CONTACT_CALLED','CALL_CONTACT','driver-app']]);
   assert.equal(accepted[2].note, 'Called Sanne'); assert.equal(accepted[1].at, iso(2));
+  assert.equal(applyEntries(absence(), [{at:iso(1), state:'EXPLAINED', source:'rehearsal'}], now).accepted[0].source, 'rehearsal');
+  assert.equal(applyEntries(absence(), [{at:iso(1), state:'EXPLAINED', source:'admin'}], now).accepted[0].source, 'driver-app', 'unknown sources are not trusted');
   const reject = (incident, entry, status) => assert.throws(() => applyEntries(incident, [entry], now), e => e instanceof IncidentError && e.status === status, JSON.stringify(entry));
   reject(absence('EXPLAINED'), {at:iso(1), state:'STOP_REQUESTED', choice:'FIND_STOP'}, 409);
   reject(absence('EXPLAINED'), {at:iso(1), state:'PARKED_CONFIRMED'}, 409);

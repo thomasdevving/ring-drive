@@ -44,6 +44,10 @@ import RingDriveCore
                 .onOpenURL { url in
                     guard url.scheme == "ringdrive" else { return }; model.selectedTab = 0
                     if url.host == "explain" { model.explain() }
+                    // Used by scripts/demo.mjs: ringdrive://demo/multicam starts the labeled multi-camera scenario.
+                    if url.host == "demo", let scenario = DemoScenario.allCases.first(where: { url.path == "/\($0.rawValue.lowercased())" || (url.path == "/multicam" && $0 == .multiCamera) }) {
+                        model.run(scenario)
+                    }
                 }
         }
     }

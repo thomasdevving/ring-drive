@@ -24,7 +24,8 @@ export function validateContact(input) {
   const phone = text(input.phone, 20, 'phone', true);
   if (phone && !/^\+[1-9]\d{6,14}$/.test(phone)) throw new ContactError('phone must be in E.164 format, for example +31612345678.');
   if ((channel === 'sms' || channel === 'call') && !phone) throw new ContactError(`channel ${channel} needs a phone number.`);
-  return {name:text(input.name, 40, 'name'), role:input.role, priority, channel, ...(phone ? {phone} : {})};
+  // Seed data for demos is flagged so every surface can label it as simulated.
+  return {name:text(input.name, 40, 'name'), role:input.role, priority, channel, ...(phone ? {phone} : {}), ...(input.simulated === true ? {simulated:true} : {})};
 }
 
 export function validateLadder(steps) {

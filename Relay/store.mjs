@@ -82,7 +82,7 @@ export class Store {
   }
   async replaceContact(id, fields) {
     const contact = this.contact(id); if (!contact) return null;
-    Object.assign(contact, fields); for (const key of ['phone']) if (!(key in fields)) delete contact[key];
+    Object.assign(contact, fields); for (const key of ['phone', 'simulated']) if (!(key in fields)) delete contact[key];
     await this.save(); return contact;
   }
   async deleteContact(id) {

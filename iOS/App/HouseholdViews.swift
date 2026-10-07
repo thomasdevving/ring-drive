@@ -38,7 +38,7 @@ struct HouseholdView: View {
                 ForEach(model.contacts) { contact in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(contact.name).font(.headline)
-                        Text([contact.role.rawValue.capitalized, contact.channel, stateLabel(contact.drivingState)].joined(separator: " · "))
+                        Text(([contact.role.rawValue.capitalized, contact.channel, stateLabel(contact.drivingState)] + (contact.simulated == true ? ["Simulated"] : [])).joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
